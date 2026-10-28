@@ -1,0 +1,56 @@
+{
+  "name": "esmvaltool",
+  "displayName": "ESMValTool",
+  "description": "Check ESMValTool recipes while you write them.",
+  "version": "0.1.0",
+  "publisher": "ESMValGroup",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ESMValGroup/esmvaltool-language-server"
+  },
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Linters",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:yaml"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "esmvaltool.restartLanguageServer",
+        "title": "Restart Language Server",
+        "category": "ESMValTool"
+      }
+    ],
+    "configuration": {
+      "title": "ESMValTool",
+      "properties": {
+        "esmvaltool.languageServer.pythonPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Python interpreter of the environment where ESMValTool and the language server are installed. If empty, the interpreter selected in the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python) is used."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "vscode:prepublish": "npm run compile"
+  },
+  "dependencies": {
+    "@vscode/python-extension": "1.0.6",
+    "vscode-languageclient": "10.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.93.0",
+    "typescript": "5.9.3"
+  }
+}

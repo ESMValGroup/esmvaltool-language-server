@@ -1,0 +1,168 @@
+[build-system]
+requires = [
+    "setuptools>=80",
+    "setuptools_scm>=8",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+authors = [
+    {name = "ESMValTool Development Team", email = "esmvaltool-dev@listserv.dfn.de"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Topic :: Text Editors :: Integrated Development Environments (IDE)",
+]
+dynamic = [
+    "readme",
+    "version",
+]
+dependencies = [
+    # TODO: require esmvalcore>=2.16.0 once it has been released.
+    "esmvalcore>=2.16.0.dev0",
+    "pygls>=2.0",
+    "pyyaml",
+]
+description = "Language server for ESMValTool recipes"
+license = "Apache-2.0"
+name = "esmvaltool-language-server"
+requires-python = ">=3.12"
+
+[project.scripts]
+esmvaltool-language-server = "esmvaltool_language_server.__main__:main"
+
+[project.urls]
+Code = "https://github.com/ESMValGroup/esmvaltool-language-server"
+Issues = "https://github.com/ESMValGroup/esmvaltool-language-server/issues"
+
+[tool.setuptools.dynamic]
+readme = {file = "README.md", content-type = "text/markdown"}
+
+[tool.setuptools_scm]
+fallback_version = "0.1.0.dev0"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+]
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# The pygls client used in the tests is not fully typed.
+module = "tests.*"
+disallow_untyped_calls = false
+disallow_untyped_decorators = false
+
+[tool.ruff]
+line-length = 79
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",   # Conflicts with the formatter.
+    "CPY001",   # Copyright notices are not required in every file.
+    "D105",     # Disable missing docstring in magic method as these are well defined.
+    "E501",     # Disable line-too-long as this is taken care of by the formatter.
+    "FIX002",   # TODOs can be useful when something cannot be done immediately.
+    "TD002",    # Missing author in TODO: can be seen from git history
+    "TD003",    # Missing issue link on the line following this TODO
+]
+future-annotations = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**.py" = [
+    "ARG",      # Fixtures that set up some state are wrongly identified as unused arguments.
+    "S101",     # Use of assert in tests code is required.
+    "SLF001",   # Testing private members is ok
+    "PLR2004",  # Magic values in tests are fine.
+    "D100",     # Missing docstring in public module
+    "D103",     # Missing docstring in public function
+    "D104",     # Missing docstring in public package
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["esmvaltool_language_server"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-arm64"]
+
+[tool.pixi.dependencies]
+# The dependencies of ESMValCore, copied from its pyproject.toml, because
+# the development version of ESMValCore is installed from ../esmvalcore.
+aiohttp = "*"
+cartopy = "*"
+cf-units = "*"
+cftime = "*"
+dask = ">=2025"
+dask-jobqueue = "*"
+distributed = "*"
+esgf-pyclient = ">=0.3.1"
+filelock = "*"
+fiona = "*"
+fire = "*"
+geopy = "*"
+humanfriendly = "*"
+intake-esgf = ">=2026.9.28"
+iris = ">=3.12.2"
+iris-esmf-regrid = ">=0.11.0"
+iris-grib = ">=0.20.0"
+isodate = ">=0.7.0"
+jinja2 = "*"
+jsonschema = "*"
+libnetcdf = "!=4.9.1"
+lxml = "*"  # Used by the `prov` library to serialize provenance to XML.
+nc-time-axis = "*"
+ncdata = ">=0.4"
+nested-lookup = "*"
+netcdf4 = "*"
+numpy = "!=1.24.3"
+packaging = "*"
+pandas = "*"
+pillow = "*"
+pip = "!=21.3"
+prov-core = "*"
+psutil = "*"
+py-cordex = "*"
+pybtex = "*"
+python = "3.14.*"
+python-stratify = ">=0.3"
+pyyaml = "*"
+requests = "*"
+rich = "*"
+scipy = ">=1.6"
+shapely = ">=2.0.0"
+xarray = "*"
+zarr = ">3"
+pygls = ">=2.0"
+
+[tool.pixi.pypi-dependencies]
+esmvalcore = { path = "../esmvalcore", editable = true }
+esmvaltool-language-server = { path = ".", editable = true }
+
+[tool.pixi.feature.dev.dependencies]
+mypy = "*"
+pre-commit = "*"
+pytest = "*"
+pytest-asyncio = "*"
+ruff = "*"
+types-pyyaml = "*"
+
+[tool.pixi.environments]
+default = { features = ["dev"], solve-group = "default" }
+
+[tool.pixi.tasks]
+test = { cmd = "pytest", description = "Run the tests" }
