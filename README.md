@@ -97,6 +97,7 @@ copy instead, see the comment in `pyproject.toml`.
 
 ```bash
 pixi run test                      # run the tests and measure coverage
+pixi run test-vscode               # run the extension and server in VSCode
 pixi run pre-commit install        # check the code before each commit
 pixi run pre-commit run -a         # check all code now
 ```
@@ -114,7 +115,10 @@ npm run format                     # format the code with Prettier
 npm run package                    # build a package that can be installed
 ```
 
-To try the extension, open the `client` directory in Visual Studio Code and
+`pixi run test-vscode` downloads VSCode, starts it with the extension, and
+checks that the problems, completion, hover, and go to definition work.
+Set `VSCODE_VERSION` to test a version other than the latest one.
+To try the extension yourself, open the `client` directory in Visual Studio Code and
 press F5.
 In the window that opens, set `esmvaltool.languageServer.pythonPath` to the
 Python interpreter of the pixi environment, which is shown by

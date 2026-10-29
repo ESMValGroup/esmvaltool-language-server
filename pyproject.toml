@@ -177,3 +177,4 @@ default = { features = ["esmvalcore-dev", "dev"], solve-group = "default" }
 
 [tool.pixi.tasks]
 test = { cmd = "pytest --cov --cov-report=term-missing --cov-report=xml", description = "Run the tests and measure their coverage" }
+test-vscode = { cmd = "npm test", cwd = "client", description = "Run the tests of the VSCode extension in VSCode" }

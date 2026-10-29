@@ -11,3 +11,4 @@ client/*.vsix
 .coverage
 .coverage.*
 coverage.xml
+client/.vscode-test/

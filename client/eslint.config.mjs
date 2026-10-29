@@ -4,13 +4,15 @@ import { defineConfig } from "eslint/config";
 import tseslint from "typescript-eslint";
 
 export default defineConfig(
-  { ignores: ["out/"] },
+  { ignores: [".vscode-test/", "out/"] },
   eslint.configs.recommended,
   tseslint.configs.strictTypeChecked,
   {
     languageOptions: {
       parserOptions: {
-        projectService: { allowDefaultProject: ["eslint.config.mjs"] },
+        projectService: {
+          allowDefaultProject: ["eslint.config.mjs", ".vscode-test.mjs"],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },
