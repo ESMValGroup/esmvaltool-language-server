@@ -138,7 +138,6 @@ prov-core = "*"
 psutil = "*"
 py-cordex = "*"
 pybtex = "*"
-python = "3.14.*"
 python-stratify = ">=0.3"
 pyyaml = "*"
 requests = "*"
@@ -172,8 +171,16 @@ ruff = "*"
 types-jsonschema = "*"
 types-pyyaml = "*"
 
+[tool.pixi.feature.py315.dependencies]
+python = "3.15.*"
+
+[tool.pixi.feature.py312.dependencies]
+# The lowest supported Python version, see requires-python above.
+python = "3.12.*"
+
 [tool.pixi.environments]
-default = { features = ["esmvalcore-dev", "dev"], solve-group = "default" }
+default = { features = ["py315", "esmvalcore-dev", "dev"], solve-group = "default" }
+py312 = { features = ["py312", "esmvalcore-dev", "dev"], solve-group = "py312" }
 
 [tool.pixi.tasks]
 test = { cmd = "pytest --cov --cov-report=term-missing --cov-report=xml", description = "Run the tests and measure their coverage" }
