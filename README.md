@@ -21,8 +21,8 @@ authors and references it defines.
   arguments, invalid values, missing keys, unknown projects and MIP tables,
   keys that are defined more than once, and YAML syntax errors.
 - Completion of keys and values: preprocessor functions and their
-  arguments, facets, projects, the MIP tables of the project, and branding
-  suffixes; the preprocessors and tasks defined in the recipe; and, if
+  arguments, facets, projects, the MIP tables of the project, and the
+  branding suffixes of the variable; the preprocessors and tasks defined in the recipe; and, if
   ESMValTool is installed, its diagnostic scripts, authors, and references.
   Keys are inserted with the arguments they require or their default value.
 - Documentation of preprocessor functions and other keys, their values, and

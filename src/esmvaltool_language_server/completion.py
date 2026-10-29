@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import yaml
 from lsprotocol import types
 
-from esmvaltool_language_server import references
+from esmvaltool_language_server import cmor, references
 from esmvaltool_language_server.context import Context, context_at
 from esmvaltool_language_server.schema import (
     MISSING,
@@ -177,6 +177,12 @@ def _value_items(
         )
         for value in choices
     ]
+    if suffixes := cmor.branding_suffixes(path, recipe):
+        # The schema allows the suffixes of all variables in the table.
+        candidates = [
+            (to_yaml(suffix), types.CompletionItemKind.EnumMember, text)
+            for suffix, text in suffixes.items()
+        ]
     if references.is_preprocessor(path):
         candidates.extend(
             (

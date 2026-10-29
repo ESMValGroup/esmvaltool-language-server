@@ -140,6 +140,18 @@ def test_complete_mip(split_cursor: SplitCursor) -> None:
     assert "Omon" in labels
 
 
+def test_complete_branding_suffix(split_cursor: SplitCursor) -> None:
+    old = "project: CMIP6\n        mip: Amon"
+    new = "project: CMIP7\n        mip: atmos\n        branding_suffix: |"
+    text, position = split_cursor(RECIPE.replace(old, new))
+    recipe = yaml.safe_load(RECIPE.replace(old, new.replace("|", "")))
+    items = completions(text, position, recipe, recipe_schema())
+    labels = [item.label for item in items]
+    assert "tavg-h2m-hxy-u" in labels
+    # Branding suffixes of other variables in the table.
+    assert "tavg-u-hxy-u" not in labels
+
+
 def test_complete_preprocessor(split_cursor: SplitCursor) -> None:
     labels = _complete(
         split_cursor,
@@ -289,6 +301,22 @@ def test_hover_reference(split_cursor: SplitCursor) -> None:
 def test_hover_theme(split_cursor: SplitCursor) -> None:
     value = _hover_tag(split_cursor, "phys", "ph|ys")
     assert value == "Theme `phys`: physics"
+
+
+def test_hover_branding_suffix(split_cursor: SplitCursor) -> None:
+    old = "project: CMIP6\n        mip: Amon"
+    new = "project: CMIP7\n        mip: atmos\n        branding_suffix: tavg-h2m-hxy-u"
+    recipe_text = RECIPE.replace(old, new)
+    text, position = split_cursor(recipe_text.replace("tavg-h2m", "tavg-|h2m"))
+    result = hover(
+        text, position, yaml.safe_load(recipe_text), recipe_schema()
+    )
+    assert result is not None
+    assert isinstance(result.contents, types.MarkupContent)
+    assert result.contents.value.startswith(
+        "Variable branding suffix (CMIP7)."
+    )
+    assert "Near-Surface Air Temperature" in result.contents.value
 
 
 def _definition(split_cursor: SplitCursor, text: str) -> types.Location | None:
