@@ -21,8 +21,9 @@ authors and references it defines.
   arguments, facets, projects, the MIP tables of the project, and branding
   suffixes; the preprocessors and tasks defined in the recipe; and, if
   ESMValTool is installed, its diagnostic scripts, authors, and references.
-- Documentation of preprocessor functions and other keys, and of
-  preprocessors, when you hover over them.
+  Keys are inserted with the arguments they require or their default value.
+- Documentation of preprocessor functions and other keys, their values, and
+  preprocessors, with default values, when you hover over them.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
   or of a diagnostic script.
 

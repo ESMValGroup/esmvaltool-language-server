@@ -168,6 +168,7 @@ def completion(
         _position(document, params.position),
         ls.recipes.get(uri, MISSING),
         recipe_schema(),
+        snippets=_supports_snippets(ls.client_capabilities),
     )
     for item in items:
         if isinstance(item.text_edit, types.TextEdit):
@@ -176,6 +177,13 @@ def completion(
                 item.text_edit.range,
             )
     return types.CompletionList(is_incomplete=False, items=items)
+
+
+def _supports_snippets(capabilities: types.ClientCapabilities) -> bool:
+    document = capabilities.text_document
+    completion = None if document is None else document.completion
+    item = None if completion is None else completion.completion_item
+    return bool(item and item.snippet_support)
 
 
 @server.feature(types.TEXT_DOCUMENT_HOVER)

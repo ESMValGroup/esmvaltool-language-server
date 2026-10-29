@@ -91,6 +91,37 @@ describe("ESMValTool extension", () => {
     assert.equal(labels.filter((label) => label === "Amon").length, 1);
   });
 
+  it("inserts the required arguments of a preprocessor step", async () => {
+    const position = positionOf(document, "  pp:\n", "  pp:\n".length);
+    const edit = new vscode.WorkspaceEdit();
+    edit.insert(document.uri, position, "    area\n");
+    assert.ok(await vscode.workspace.applyEdit(edit));
+    try {
+      const list = await vscode.commands.executeCommand<vscode.CompletionList>(
+        "vscode.executeCompletionItemProvider",
+        document.uri,
+        position.translate(0, "    area".length),
+      );
+      const item = list.items.find(
+        (candidate) => candidate.label === "area_statistics",
+      );
+      assert.ok(item);
+      assert.ok(item.insertText instanceof vscode.SnippetString);
+      assert.equal(
+        item.insertText.value,
+        "area_statistics:\n      operator: ${1}",
+      );
+      assert.equal(item.keepWhitespace, true);
+    } finally {
+      const undo = new vscode.WorkspaceEdit();
+      undo.delete(
+        document.uri,
+        new vscode.Range(position, position.translate(1, 0)),
+      );
+      await vscode.workspace.applyEdit(undo);
+    }
+  });
+
   it("shows documentation", async () => {
     const texts = await hovers(document, positionOf(document, "regrid:", 1));
     assert.equal(texts.length, 1);

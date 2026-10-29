@@ -7,6 +7,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 import jsonschema
+import yaml
 from esmvalcore.recipe import generate_recipe_schema
 
 if TYPE_CHECKING:
@@ -122,6 +123,37 @@ class RecipeSchema:
                     return str(schema[keyword])
         return None
 
+    def default(self, nodes: list[JSONSchema]) -> object:
+        """Get the first default value, or :obj:`MISSING` if there is none."""
+        for schema in self._expand_all(nodes, MISSING):
+            if "default" in schema:
+                return schema["default"]
+        return MISSING
+
+    def required(self, nodes: list[JSONSchema]) -> list[str]:
+        """Get the keys that a mapping must have, if all schemas agree."""
+        keys = {
+            tuple(schema["required"])
+            for schema in self._expand_all(nodes, MISSING)
+            if schema.get("required")
+        }
+        return list(keys.pop()) if len(keys) == 1 else []
+
+    def properties(
+        self, nodes: list[JSONSchema]
+    ) -> dict[str, list[JSONSchema]]:
+        """Get the keys that the schemas describe, with their schemas."""
+        return properties(self._expand_all(nodes, MISSING))
+
+    def documentation(self, nodes: list[JSONSchema]) -> str | None:
+        """Describe the schemas in Markdown, including the default value."""
+        description = self.description(nodes)
+        default = self.default(nodes)
+        if default is MISSING:
+            return description
+        line = f"Default: `{to_yaml(default)}`"
+        return line if description is None else f"{description}\n\n{line}"
+
     def types(self, nodes: list[JSONSchema]) -> set[str]:
         """Get the JSON types that the schemas allow."""
         result: set[str] = set()
@@ -131,6 +163,12 @@ class RecipeSchema:
             if "const" in schema:
                 result.add(_json_type(schema["const"]))
         return result
+
+
+def to_yaml(value: object) -> str:
+    """Write a value as YAML, on one line if possible."""
+    text = yaml.safe_dump(value, default_flow_style=True, width=1000)
+    return text.removesuffix("\n").removesuffix("\n...")
 
 
 def _json_type(value: object) -> str:

@@ -52,6 +52,8 @@ class Context:
     """Column where the word starts."""
     end: int
     """Column where the word ends."""
+    flow: bool = False
+    """Whether the cursor is in a flow collection, e.g. ``{a: 1, b: 2}``."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -332,4 +334,11 @@ def context_at(text: str, line_number: int, character: int) -> Context | None:
         kind = "item"
     if kind == "item" and _is_key(line, end):
         kind = "key"
-    return Context(tuple(path), kind, line[start:end], start, end)
+    return Context(
+        tuple(path),
+        kind,
+        line[start:end],
+        start,
+        end,
+        flow=bool(flow_path) or at_key,
+    )

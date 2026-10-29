@@ -10,14 +10,17 @@ from lsprotocol import types
 from esmvaltool_language_server import references
 from esmvaltool_language_server.context import Context, context_at
 from esmvaltool_language_server.schema import (
+    MISSING,
     RecipeSchema,
     data_at,
-    properties,
+    to_yaml,
     values,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+    from esmvaltool_language_server.schema import JSONSchema
 
 # Keys whose values are only collections, so the value starts on the next
 # line.
@@ -29,6 +32,8 @@ def completions(
     position: types.Position,
     recipe: object,
     schema: RecipeSchema,
+    *,
+    snippets: bool = False,
 ) -> list[types.CompletionItem]:
     """Suggest keys and values at a position in a recipe.
 
@@ -44,6 +49,10 @@ def completions(
         :obj:`~esmvaltool_language_server.schema.MISSING` if there is none.
     schema:
         The recipe schema.
+    snippets:
+        Whether the editor supports snippets. If it does, keys are inserted
+        with their default value or the keys that their value requires, as
+        placeholders.
 
     Returns
     -------
@@ -59,7 +68,9 @@ def completions(
     )
     items: list[types.CompletionItem] = []
     if context.kind in {"key", "item"}:
-        items.extend(_key_items(context, recipe, schema, edit_range))
+        items.extend(
+            _key_items(context, recipe, schema, edit_range, snippets=snippets),
+        )
     if context.kind in {"value", "item"}:
         items.extend(_value_items(context, recipe, schema, edit_range))
     return items
@@ -76,27 +87,74 @@ def _key_items(
     recipe: object,
     schema: RecipeSchema,
     edit_range: types.Range,
+    *,
+    snippets: bool,
 ) -> Iterable[types.CompletionItem]:
     data = data_at(recipe, context.path)
     existing = set(data) - {context.word} if isinstance(data, dict) else set()
-    for key, nodes in properties(schema.at(context.path, recipe)).items():
+    for key, nodes in schema.properties(
+        schema.at(context.path, recipe)
+    ).items():
         if key in existing:
             continue
-        types_ = schema.types(nodes)
-        collection = bool(types_) and types_ <= _COLLECTION_TYPES
+        text = _key_snippet(key, nodes, schema, context) if snippets else None
         yield types.CompletionItem(
             label=key,
             kind=types.CompletionItemKind.Property,
-            documentation=_documentation(schema.description(nodes)),
+            documentation=_documentation(schema.documentation(nodes)),
+            insert_text_format=(
+                types.InsertTextFormat.PlainText
+                if text is None
+                else types.InsertTextFormat.Snippet
+            ),
+            # The snippets contain the indentation of each line.
+            insert_text_mode=types.InsertTextMode.AsIs,
             text_edit=types.TextEdit(
                 range=edit_range,
-                new_text=f"{key}:" if collection else f"{key}: ",
+                new_text=_key_text(key, nodes, schema)
+                if text is None
+                else text,
             ),
         )
 
 
-def _yaml(value: object) -> str:
-    return yaml.safe_dump(value).removesuffix("\n").removesuffix("\n...")
+def _key_text(key: str, nodes: list[JSONSchema], schema: RecipeSchema) -> str:
+    types_ = schema.types(nodes)
+    collection = bool(types_) and types_ <= _COLLECTION_TYPES
+    return f"{key}:" if collection else f"{key}: "
+
+
+def _placeholder(number: int, value: object) -> str:
+    if value is MISSING or isinstance(value, dict | list):
+        return f"${{{number}}}"
+    text = to_yaml(value)
+    for char in "\\$}":
+        text = text.replace(char, f"\\{char}")
+    return f"${{{number}:{text}}}"
+
+
+def _key_snippet(
+    key: str,
+    nodes: list[JSONSchema],
+    schema: RecipeSchema,
+    context: Context,
+) -> str | None:
+    """Insert a key with the keys its value requires or its default value."""
+    required = [] if context.flow else schema.required(nodes)
+    if required:
+        children = schema.properties(nodes)
+        indent = " " * (context.start + 2)
+        lines = [f"{key}:"]
+        lines.extend(
+            f"{indent}{name}: "
+            + _placeholder(i, schema.default(children.get(name, [])))
+            for i, name in enumerate(required, start=1)
+        )
+        return "\n".join(lines)
+    default = schema.default(nodes)
+    if default is MISSING or isinstance(default, dict | list):
+        return None
+    return f"{key}: {_placeholder(1, default)}"
 
 
 def _value_items(
@@ -106,9 +164,18 @@ def _value_items(
     edit_range: types.Range,
 ) -> Iterable[types.CompletionItem]:
     path = context.path
+    nodes = schema.at(path, recipe)
+    default = schema.default(nodes)
+    choices = values(nodes)
+    if default is not MISSING and default not in choices:
+        choices.insert(0, default)
     candidates: list[tuple[str, types.CompletionItemKind, str | None]] = [
-        (_yaml(value), types.CompletionItemKind.EnumMember, None)
-        for value in values(schema.at(path, recipe))
+        (
+            to_yaml(value),
+            types.CompletionItemKind.EnumMember,
+            "Default value." if value == default else None,
+        )
+        for value in choices
     ]
     if references.is_preprocessor(path):
         candidates.extend(
@@ -132,11 +199,13 @@ def _value_items(
             (name, types.CompletionItemKind.File, None)
             for name in references.script_names()
         )
+    default_label = None if default is MISSING else to_yaml(default)
     for label, kind, documentation in candidates:
         yield types.CompletionItem(
             label=label,
             kind=kind,
             documentation=_documentation(documentation),
+            preselect=label == default_label or None,
             text_edit=types.TextEdit(range=edit_range, new_text=label),
         )
 

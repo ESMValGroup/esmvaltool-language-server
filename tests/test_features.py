@@ -86,6 +86,52 @@ def test_complete_step_key_text(split_cursor: SplitCursor) -> None:
     assert "Extract a region" in item.documentation.value
 
 
+def _snippet(split_cursor: SplitCursor, old: str, new: str, label: str) -> str:
+    """Get the text that completing a key inserts, with snippets."""
+    assert old in RECIPE
+    text, position = split_cursor(RECIPE.replace(old, new))
+    items = completions(
+        text, position, MISSING, recipe_schema(), snippets=True
+    )
+    (item,) = [item for item in items if item.label == label]
+    assert isinstance(item.text_edit, types.TextEdit)
+    return item.text_edit.new_text
+
+
+def test_complete_required_keys(split_cursor: SplitCursor) -> None:
+    text = _snippet(
+        split_cursor, "  other:\n", "  other:\n    reg|\n", "regrid"
+    )
+    assert text == "regrid:\n      target_grid: ${1}\n      scheme: ${2}"
+
+
+def test_complete_key_with_default(split_cursor: SplitCursor) -> None:
+    text = _snippet(
+        split_cursor,
+        "  other:\n",
+        "  other:\n    climate_statistics:\n      oper|\n",
+        "operator",
+    )
+    assert text == "operator: ${1:mean}"
+
+
+def test_complete_key_in_flow_mapping(split_cursor: SplitCursor) -> None:
+    text = _snippet(split_cursor, "  other:\n", "  other: {reg|}\n", "regrid")
+    assert text == "regrid: "
+
+
+def test_complete_default_value(split_cursor: SplitCursor) -> None:
+    text, position = split_cursor(
+        RECIPE.replace(
+            "  other:\n",
+            "  other:\n    climate_statistics:\n      operator: |\n",
+        ),
+    )
+    items = completions(text, position, MISSING, recipe_schema())
+    preselected = [item.label for item in items if item.preselect]
+    assert preselected == ["mean"]
+
+
 def test_complete_mip(split_cursor: SplitCursor) -> None:
     labels = _complete(split_cursor, "mip: Amon", "mip: A|")
     assert "Amon" in labels
@@ -128,7 +174,31 @@ def test_hover_preprocessor(split_cursor: SplitCursor) -> None:
 
 def test_hover_value(split_cursor: SplitCursor) -> None:
     text, position = split_cursor(RECIPE.replace("CMIP6", "CM|IP6"))
-    assert hover(text, position, MISSING, recipe_schema()) is None
+    result = hover(text, position, MISSING, recipe_schema())
+    assert result is not None
+    assert isinstance(result.contents, types.MarkupContent)
+    assert result.contents.value == "Project, for example CMIP6."
+
+
+def test_hover_default(split_cursor: SplitCursor) -> None:
+    text, position = split_cursor(
+        RECIPE.replace(
+            "  other:\n",
+            "  other:\n    climate_statistics:\n      oper|ator: max\n",
+        ),
+    )
+    result = hover(text, position, MISSING, recipe_schema())
+    assert result is not None
+    assert isinstance(result.contents, types.MarkupContent)
+    assert result.contents.value.endswith("\n\nDefault: `mean`")
+
+
+def test_hover_text_value(split_cursor: SplitCursor) -> None:
+    text, position = split_cursor(RECIPE.replace("Example", "Exa|mple"))
+    result = hover(text, position, MISSING, recipe_schema())
+    assert result is not None
+    assert isinstance(result.contents, types.MarkupContent)
+    assert result.contents.value == "Recipe title."
 
 
 def _definition(split_cursor: SplitCursor, text: str) -> types.Location | None:
