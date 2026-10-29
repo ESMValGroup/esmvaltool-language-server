@@ -27,6 +27,14 @@ authors and references it defines.
   Keys are inserted with the arguments they require or their default value.
 - Documentation of preprocessor functions and other keys, their values, and
   preprocessors, with default values, when you hover over them.
+  If ESMValTool is installed, hovering over an author, project, theme, or
+  realm shows its definition in `config-references.yml`, and hovering over
+  a reference shows its bibtex entry.
+  The server reads `config-references.yml` and the list of bibtex files only
+  once, so restart it after changing that file or adding a bibtex file.
+  In Visual Studio Code, press Ctrl+Shift+P (Cmd+Shift+P on macOS) and run
+  **ESMValTool: Restart Language Server**; in Emacs, run
+  `M-x eglot-reconnect`.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
   or of a diagnostic script.
 

@@ -1,4 +1,4 @@
-"""Find what a recipe refers to: preprocessors, tasks, and scripts."""
+"""Find what a recipe refers to: preprocessors, tasks, scripts, and tags."""
 
 from __future__ import annotations
 
@@ -7,12 +7,25 @@ import importlib.util
 from pathlib import Path as FilePath
 from typing import TYPE_CHECKING
 
+import yaml
+
 from esmvaltool_language_server.schema import child
 
 if TYPE_CHECKING:
     from esmvaltool_language_server.context import Path
 
 SCRIPT_SUFFIXES = (".jl", ".ncl", ".py", ".R")
+
+# The sections of ``config-references.yml`` that items of lists in a recipe
+# refer to, or ``references`` for the bibtex files.
+_TAG_SECTIONS: dict[tuple[str | None, ...], str] = {
+    ("documentation", "authors", None): "authors",
+    ("documentation", "maintainer", None): "authors",
+    ("documentation", "projects", None): "projects",
+    ("documentation", "references", None): "references",
+    ("diagnostics", None, "themes", None): "themes",
+    ("diagnostics", None, "realms", None): "realms",
+}
 
 
 def _matches(path: Path, pattern: tuple[str | None, ...]) -> bool:
@@ -42,6 +55,14 @@ def is_ancestor(path: Path) -> bool:
 def is_script(path: Path) -> bool:
     """Check if a path is the file of a diagnostic script."""
     return _matches(path, ("diagnostics", None, "scripts", None, "script"))
+
+
+def tag_section(path: Path) -> str | None:
+    """Get the section of the tags that the item at a path refers to."""
+    for pattern, section in _TAG_SECTIONS.items():
+        if _matches(path, pattern):
+            return section
+    return None
 
 
 def _keys(data: object) -> list[str]:
@@ -81,16 +102,56 @@ def task_paths(name: str) -> list[Path]:
 
 
 @functools.cache
-def scripts_directory() -> FilePath | None:
-    """Find the diagnostic scripts of ESMValTool, if it is installed.
+def esmvaltool_directory() -> FilePath | None:
+    """Find the directory of the ESMValTool package, if it is installed.
 
-    ESMValCore looks for scripts in the same directory.
+    ESMValCore looks for scripts, tags, and references in the same directory.
     """
     spec = importlib.util.find_spec("esmvaltool")
     if spec is None or spec.origin is None:
         return None
-    directory = FilePath(spec.origin).parent / "diag_scripts"
+    return FilePath(spec.origin).parent
+
+
+def scripts_directory() -> FilePath | None:
+    """Find the diagnostic scripts of ESMValTool, if it is installed."""
+    package = esmvaltool_directory()
+    if package is None:
+        return None
+    directory = package / "diag_scripts"
     return directory if directory.is_dir() else None
+
+
+@functools.cache
+def tags() -> dict[str, object]:
+    """Load the tags defined in ``config-references.yml`` of ESMValTool."""
+    package = esmvaltool_directory()
+    if package is None:
+        return {}
+    path = package / "config-references.yml"
+    try:
+        content = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return {}
+    return content if isinstance(content, dict) else {}
+
+
+def tag_value(section: str, name: str) -> object:
+    """Get what a tag stands for, or :obj:`None` if it is not defined.
+
+    For references, this is the content of their bibtex file.
+    """
+    if section == "references":
+        package = esmvaltool_directory()
+        if package is None:
+            return None
+        path = package / "references" / f"{name}.bibtex"
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+    content = child(tags().get(section), name)
+    return content if isinstance(content, dict | str) else None
 
 
 def script_file(name: str) -> FilePath | None:

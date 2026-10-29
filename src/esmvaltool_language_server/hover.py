@@ -14,6 +14,15 @@ from esmvaltool_language_server.schema import MISSING, RecipeSchema, data_at
 if TYPE_CHECKING:
     from esmvaltool_language_server.context import Path
 
+# How to name a tag of each section in its description.
+_TAG_KINDS = {
+    "authors": "Author",
+    "projects": "Project",
+    "realms": "Realm",
+    "references": "Reference",
+    "themes": "Theme",
+}
+
 
 def hover(
     text: str,
@@ -23,8 +32,9 @@ def hover(
 ) -> types.Hover | None:
     """Describe the key or value at a position in a recipe.
 
-    Keys and values are described by the recipe schema and the names of
-    preprocessors by their steps.
+    Keys and values are described by the recipe schema, the names of
+    preprocessors by their steps, and tags such as authors and references by
+    their definition in ESMValTool.
 
     Parameters
     ----------
@@ -57,7 +67,9 @@ def hover(
             else preprocessor_documentation(context.word, preprocessor)
         )
     else:
-        description = _value_documentation(context.path, recipe, schema)
+        description = _tag_documentation(context.path, context.word)
+        if description is None:
+            description = _value_documentation(context.path, recipe, schema)
     if description is None:
         return None
     return types.Hover(
@@ -83,3 +95,20 @@ def _value_documentation(
         # Items of lists are described by the list.
         description = schema.documentation(schema.at(path[:-1], recipe))
     return description
+
+
+def _tag_documentation(path: Path, name: str) -> str | None:
+    """Describe a tag by its definition in ESMValTool."""
+    section = references.tag_section(path)
+    if section is None:
+        return None
+    value = references.tag_value(section, name)
+    if value is None:
+        return None
+    title = f"{_TAG_KINDS[section]} `{name}`"
+    if section == "references":
+        return f"{title}:\n\n```bibtex\n{value}\n```"
+    if isinstance(value, dict):
+        lines = [f"- {key}: {item}" for key, item in value.items() if item]
+        return "\n".join([f"{title}:", "", *lines])
+    return f"{title}: {value}"
