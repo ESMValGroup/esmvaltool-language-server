@@ -118,6 +118,7 @@ copy instead, see the comment in `pyproject.toml`.
 
 ```bash
 pixi run test                      # run the tests and measure coverage
+pixi run -e py312 test             # run the tests with the oldest Python
 pixi run test-vscode               # run the extension and server in VSCode
 pixi run pre-commit install        # check the code before each commit
 pixi run pre-commit run -a         # check all code now
