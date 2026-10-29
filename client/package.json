@@ -49,13 +49,15 @@
     }
   },
   "scripts": {
-    "compile": "tsc -p .",
-    "watch": "tsc -watch -p .",
-    "vscode:prepublish": "npm run compile",
-    "package": "vsce package",
+    "check-types": "tsc --noEmit",
+    "bundle": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node20 --sourcemap",
+    "compile": "npm run check-types && npm run bundle",
+    "watch": "npm run bundle -- --watch",
     "lint": "eslint",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "vscode:prepublish": "npm run check-types && npm run bundle -- --minify",
+    "package": "vsce package --no-dependencies"
   },
   "dependencies": {
     "@vscode/python-extension": "1.0.6",
@@ -66,6 +68,7 @@
     "@types/node": "22.20.5",
     "@types/vscode": "1.93.0",
     "@vscode/vsce": "3.6.2",
+    "esbuild": "0.28.2",
     "eslint": "10.12.0",
     "prettier": "3.9.10",
     "typescript": "5.9.3",

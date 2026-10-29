@@ -13,6 +13,16 @@ const SERVER_MODULE = "esmvaltool_language_server";
 
 let client: LanguageClient | undefined;
 
+// Starting the server takes a few seconds, so restarts can be requested
+// while one is still in progress. Starts and stops run one at a time, so
+// each start stops the client of the previous one.
+let queue: Promise<void> = Promise.resolve();
+
+function enqueue(operation: () => Promise<void>): Promise<void> {
+  queue = queue.then(operation, operation);
+  return queue;
+}
+
 export async function activate(
   context: vscode.ExtensionContext,
 ): Promise<void> {
@@ -33,26 +43,31 @@ export async function activate(
       python.environments.onDidChangeActiveEnvironmentPath(() => restart()),
     );
   }
-  await start();
+  await enqueue(start);
 }
 
 export async function deactivate(): Promise<void> {
-  await stop();
+  await enqueue(stop);
 }
 
 async function start(): Promise<void> {
   const python = await findPython();
   if (!(await hasServer(python))) {
-    const choice = await vscode.window.showErrorMessage(
-      `The ESMValTool language server is not installed in the Python ` +
-        `environment of ${python}. Install it in that environment with ` +
-        `"pip install esmvaltool-language-server", or select the Python ` +
-        `interpreter of an environment where it is installed.`,
-      "Select Python Interpreter",
-    );
-    if (choice) {
-      await vscode.commands.executeCommand("python.setInterpreter");
-    }
+    // Do not wait for the message to be closed, so it does not hold up
+    // later restarts.
+    void vscode.window
+      .showErrorMessage(
+        `The ESMValTool language server is not installed in the Python ` +
+          `environment of ${python}. Install it in that environment with ` +
+          `"pip install esmvaltool-language-server", or select the Python ` +
+          `interpreter of an environment where it is installed.`,
+        "Select Python Interpreter",
+      )
+      .then((choice) => {
+        if (choice) {
+          void vscode.commands.executeCommand("python.setInterpreter");
+        }
+      });
     return;
   }
   const serverOptions: ServerOptions = {
@@ -79,9 +94,11 @@ async function stop(): Promise<void> {
   await running?.stop();
 }
 
-async function restart(): Promise<void> {
-  await stop();
-  await start();
+function restart(): Promise<void> {
+  return enqueue(async () => {
+    await stop();
+    await start();
+  });
 }
 
 /** Find the Python interpreter of the environment with ESMValTool. */

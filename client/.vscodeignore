@@ -1,3 +1,9 @@
+# Only the bundled extension in out/ is needed.
+.vscode/**
+node_modules/**
 src/**
-tsconfig.json
 **/*.map
+.prettierignore
+eslint.config.mjs
+package-lock.json
+tsconfig.json

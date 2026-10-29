@@ -108,7 +108,7 @@ The Visual Studio Code extension has these commands, to be run in the
 `client` directory:
 
 ```bash
-npm run compile                    # compile the extension
+npm run compile                    # check the types and bundle the extension
 npm run lint                       # check the code with ESLint
 npm run format                     # format the code with Prettier
 npm run package                    # build a package that can be installed
