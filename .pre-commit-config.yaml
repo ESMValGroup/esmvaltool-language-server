@@ -52,5 +52,5 @@ repos:
         name: eslint
         entry: npm --prefix client run --silent lint
         language: system
-        files: ^client/(src/|eslint\.config\.mjs$|tsconfig\.json$|package\.json$)
+        files: ^client/(src/|test/|\.vscode-test\.mjs$|eslint\.config\.mjs$|tsconfig\.json$|package\.json$)
         pass_filenames: false
