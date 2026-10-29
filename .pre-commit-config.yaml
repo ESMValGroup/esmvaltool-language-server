@@ -18,9 +18,39 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
         args: [--markdown-linebreak-ext=md]
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: "v0.17.2"
+  # Ruff and pyrefly are run from the pixi environment, so pyrefly finds the
+  # dependencies and the versions match the lock file.
+  - repo: local
     hooks:
       - id: ruff-check
-        args: [--fix]
+        name: ruff check
+        entry: pixi run ruff check --fix --force-exclude
+        language: system
+        types_or: [python, pyi]
       - id: ruff-format
+        name: ruff format
+        entry: pixi run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: pyrefly
+        name: pyrefly
+        entry: pixi run pyrefly check
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+  # The tools for the VSCode extension are run with the versions installed in
+  # client/node_modules, so run `npm install` in the client directory first.
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier
+        entry: npm --prefix client run --silent format
+        language: system
+        files: ^client/
+        pass_filenames: false
+      - id: eslint
+        name: eslint
+        entry: npm --prefix client run --silent lint
+        language: system
+        files: ^client/(src/|eslint\.config\.mjs$|tsconfig\.json$|package\.json$)
+        pass_filenames: false

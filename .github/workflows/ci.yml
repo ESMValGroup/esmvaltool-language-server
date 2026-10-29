@@ -1,0 +1,58 @@
+---
+name: CI
+
+permissions: {}
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  server:
+    name: Language server
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: pixi run bash -e {0}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The version is derived from the git history.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+        with:
+          locked: true
+      - name: Check code quality
+        # The checks of the VSCode extension run in the client job.
+        env:
+          SKIP: prettier,eslint
+        run: pre-commit run --all-files
+      - name: Run tests
+        run: pixi run test
+
+  client:
+    name: VSCode extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm ci
+      - name: Check formatting
+        run: npm run format:check
+      - name: Lint
+        run: npm run lint
+      - name: Compile
+        run: npm run compile
+      - name: Check that the extension can be packaged
+        run: npm run package

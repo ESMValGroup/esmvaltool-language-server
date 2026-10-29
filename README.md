@@ -91,22 +91,34 @@ definition.
 
 ## Development
 
-The development environment is managed with [pixi](https://pixi.sh) and uses
-the development version of ESMValCore in `../esmvalcore`:
+The development environment is managed with [pixi](https://pixi.sh).
+It uses the development version of ESMValCore from GitHub; to use a local
+copy instead, see the comment in `pyproject.toml`.
 
 ```bash
-pixi run test                      # run the tests
-pixi run ruff check                # check the code
-pixi run mypy src tests            # check the type hints
+pixi run test                      # run the tests and measure coverage
+pixi run pre-commit install        # check the code before each commit
+pixi run pre-commit run -a         # check all code now
 ```
 
-To try the Visual Studio Code extension, open the `client` directory in
-Visual Studio Code, run `npm install`, and press F5.
+The pre-commit hooks run ruff and pyrefly from the pixi environment, and
+ESLint and Prettier from `client/node_modules`, so run `npm install` in the
+`client` directory first.
+The Visual Studio Code extension has these commands, to be run in the
+`client` directory:
+
+```bash
+npm run compile                    # compile the extension
+npm run lint                       # check the code with ESLint
+npm run format                     # format the code with Prettier
+npm run package                    # build a package that can be installed
+```
+
+To try the extension, open the `client` directory in Visual Studio Code and
+press F5.
 In the window that opens, set `esmvaltool.languageServer.pythonPath` to the
 Python interpreter of the pixi environment, which is shown by
 `pixi run which python`.
-To build a package of the extension that can be installed, run
-`npx @vscode/vsce package` in the `client` directory.
 
 ## License
 

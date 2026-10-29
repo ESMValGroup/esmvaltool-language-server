@@ -53,15 +53,14 @@ addopts = [
 ]
 testpaths = ["tests"]
 
-[tool.mypy]
-strict = true
-ignore_missing_imports = true
+[tool.coverage.run]
+branch = true
+source = ["esmvaltool_language_server"]
+# Also measure the server processes that the tests start.
+patch = ["subprocess"]
 
-[[tool.mypy.overrides]]
-# The pygls client used in the tests is not fully typed.
-module = "tests.*"
-disallow_untyped_calls = false
-disallow_untyped_decorators = false
+[tool.coverage.report]
+exclude_also = ["if TYPE_CHECKING:"]
 
 [tool.ruff]
 line-length = 79
@@ -101,8 +100,9 @@ channels = ["conda-forge"]
 platforms = ["linux-64", "osx-arm64"]
 
 [tool.pixi.dependencies]
-# The dependencies of ESMValCore, copied from its pyproject.toml, because
-# the development version of ESMValCore is installed from ../esmvalcore.
+# The dependencies of ESMValCore, copied from its pyproject.toml, so they are
+# installed from conda-forge, because the development version of ESMValCore
+# is installed from GitHub.
 aiohttp = "*"
 cartopy = "*"
 cf-units = "*"
@@ -150,19 +150,30 @@ zarr = ">3"
 pygls = ">=2.0"
 
 [tool.pixi.pypi-dependencies]
-esmvalcore = { path = "../esmvalcore", editable = true }
 esmvaltool-language-server = { path = ".", editable = true }
 
+# Use the development version of ESMValCore, because no release has the
+# recipe checks yet.
+# TODO: use the main branch once ESMValCore#3261 has been merged and a
+# released version of ESMValCore once v2.16 is available.
+[tool.pixi.feature.esmvalcore-dev.pypi-dependencies]
+esmvalcore = { git = "https://github.com/ESMValGroup/ESMValCore.git", branch = "recipe-json-schema" }
+# Replace the line above with the following to use a local ESMValCore
+# repository instead.
+# esmvalcore = { path = "../esmvalcore", editable = true }
+
 [tool.pixi.feature.dev.dependencies]
-mypy = "*"
 pre-commit = "*"
+pyrefly = "*"
 pytest = "*"
 pytest-asyncio = "*"
+pytest-cov = "*"
 ruff = "*"
+types-jsonschema = "*"
 types-pyyaml = "*"
 
 [tool.pixi.environments]
-default = { features = ["dev"], solve-group = "default" }
+default = { features = ["esmvalcore-dev", "dev"], solve-group = "default" }
 
 [tool.pixi.tasks]
-test = { cmd = "pytest", description = "Run the tests" }
+test = { cmd = "pytest --cov --cov-report=term-missing --cov-report=xml", description = "Run the tests and measure their coverage" }

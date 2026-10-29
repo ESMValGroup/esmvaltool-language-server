@@ -10,7 +10,7 @@ from lsprotocol import types
 from pygls.lsp.client import LanguageClient
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator
     from pathlib import Path
 
 TIMEOUT = 60
@@ -19,7 +19,7 @@ TIMEOUT = 60
 @contextlib.asynccontextmanager
 async def _client(
     published: asyncio.Queue[types.PublishDiagnosticsParams],
-) -> AsyncIterator[LanguageClient]:
+) -> AsyncGenerator[LanguageClient]:
     """Start the server and a client that collects the diagnostics."""
     client = LanguageClient("test-client", "0")
 

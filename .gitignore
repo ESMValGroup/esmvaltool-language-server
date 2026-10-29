@@ -6,3 +6,8 @@ dist/
 client/node_modules/
 client/out/
 client/*.vsix
+
+# Test coverage
+.coverage
+.coverage.*
+coverage.xml
