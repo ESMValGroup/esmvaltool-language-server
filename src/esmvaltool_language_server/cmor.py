@@ -12,6 +12,8 @@ from esmvalcore.config import CFG
 from esmvaltool_language_server.schema import child, data_at
 
 if TYPE_CHECKING:
+    from esmvalcore.cmor.table import VariableInfo
+
     from esmvaltool_language_server.context import Path
 
 _GLOB_CHARS = frozenset("*?[")
@@ -129,16 +131,14 @@ def _branded_variables(project: str) -> dict[str, dict[str, dict[str, str]]]:
     return result
 
 
-def _describe(mip: str, name: str, vardef: object) -> str:
-    long_name = getattr(vardef, "long_name", "")
-    units = getattr(vardef, "units", "")
-    dimensions = " ".join(getattr(vardef, "dimensions", []))
-    lines = [f"`{name}` in table `{mip}`: {long_name}"]
-    if units:
-        lines.append(f"Units: `{units}`")
-    if dimensions:
-        lines.append(f"Dimensions: `{dimensions}`")
-    return "\n\n".join(lines)
+def _describe(mip: str, name: str, vardef: VariableInfo) -> str:
+    return "\n\n".join(
+        [
+            f"`{name}` in table `{mip}`: {vardef.long_name}",
+            f"Units: `{vardef.units}`",
+            f"Dimensions: `{' '.join(vardef.dimensions)}`",
+        ]
+    )
 
 
 def branding_suffixes(path: Path, recipe: object) -> dict[str, str]:
