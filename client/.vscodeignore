@@ -11,3 +11,4 @@ tsconfig.json
 .vscode-test.mjs
 out/test/**
 test/**
+coverage/**

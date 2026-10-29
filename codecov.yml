@@ -1,0 +1,5 @@
+---
+# The coverage report of the VSCode extension includes its bundled
+# dependencies.
+ignore:
+  - client/node_modules

@@ -96,4 +96,12 @@ jobs:
       - name: Test the extension in VSCode
         env:
           VSCODE_VERSION: ${{ matrix.vscode-version }}
-        run: xvfb-run -a npm test
+        run: xvfb-run -a npm test -- --coverage
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: client/coverage/lcov.info
+          disable_search: true
+          # Secrets are not available to pull requests from forks, but they
+          # can upload without a token.
+          token: ${{ secrets.CODECOV_TOKEN }}
