@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from lsprotocol import types
 
-from esmvaltool_language_server import references
+from esmvaltool_language_server import cmor, references
 from esmvaltool_language_server.completion import preprocessor_documentation
 from esmvaltool_language_server.context import context_at
 from esmvaltool_language_server.schema import MISSING, RecipeSchema, data_at
@@ -69,7 +69,9 @@ def hover(
     else:
         description = _tag_documentation(context.path, context.word)
         if description is None:
-            description = _value_documentation(context.path, recipe, schema)
+            description = _value_documentation(
+                context.path, context.word, recipe, schema
+            )
     if description is None:
         return None
     return types.Hover(
@@ -86,6 +88,7 @@ def hover(
 
 def _value_documentation(
     path: Path,
+    value: str,
     recipe: object,
     schema: RecipeSchema,
 ) -> str | None:
@@ -94,6 +97,11 @@ def _value_documentation(
     if description is None and path and isinstance(path[-1], int):
         # Items of lists are described by the list.
         description = schema.documentation(schema.at(path[:-1], recipe))
+    variable = cmor.branding_suffixes(path, recipe).get(value)
+    if variable is not None:
+        return (
+            variable if description is None else f"{description}\n\n{variable}"
+        )
     return description
 
 
