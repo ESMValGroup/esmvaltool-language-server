@@ -13,9 +13,6 @@ jobs:
   server:
     name: Language server
     runs-on: ubuntu-latest
-    permissions:
-      # Used to authenticate the coverage upload to Codecov.
-      id-token: write
     defaults:
       run:
         shell: pixi run bash -e {0}
@@ -40,11 +37,9 @@ jobs:
         with:
           files: coverage.xml
           disable_search: true
-          # Pull requests from forks cannot get an OIDC token, but they can
-          # upload without one.
-          use_oidc: >-
-            ${{ !(github.event_name == 'pull_request' &&
-            github.event.pull_request.head.repo.fork) }}
+          # Secrets are not available to pull requests from forks, but they
+          # can upload without a token.
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   client:
     name: VSCode extension
