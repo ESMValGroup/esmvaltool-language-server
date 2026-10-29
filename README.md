@@ -1,5 +1,8 @@
 # ESMValTool language server
 
+[![CI](https://github.com/ESMValGroup/esmvaltool-language-server/actions/workflows/ci.yml/badge.svg)](https://github.com/ESMValGroup/esmvaltool-language-server/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/ESMValGroup/esmvaltool-language-server/graph/badge.svg)](https://codecov.io/gh/ESMValGroup/esmvaltool-language-server)
+
 A [language server](https://microsoft.github.io/language-server-protocol/) for
 [ESMValTool](https://www.esmvaltool.org) recipes, and a Visual Studio Code
 extension that uses it.
