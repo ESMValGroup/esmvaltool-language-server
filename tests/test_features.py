@@ -5,16 +5,18 @@ from __future__ import annotations
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
+import pytest
 import yaml
 from lsprotocol import types
 
+from esmvaltool_language_server import references
 from esmvaltool_language_server.completion import completions
 from esmvaltool_language_server.definition import definition
 from esmvaltool_language_server.hover import hover
 from esmvaltool_language_server.schema import MISSING, recipe_schema
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
     from pathlib import Path
 
     SplitCursor = Callable[[str], tuple[str, types.Position]]
@@ -199,6 +201,94 @@ def test_hover_text_value(split_cursor: SplitCursor) -> None:
     assert result is not None
     assert isinstance(result.contents, types.MarkupContent)
     assert result.contents.value == "Recipe title."
+
+
+@pytest.fixture
+def esmvaltool(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> Iterator[None]:
+    """Define tags and references in a fake ESMValTool installation."""
+    (tmp_path / "config-references.yml").write_text(
+        dedent("""\
+            authors:
+              doe_jane:
+                name: Doe, Jane
+                institute: Example Institute
+                orcid:
+            themes:
+              phys: physics
+            """),
+    )
+    (tmp_path / "references").mkdir()
+    (tmp_path / "references" / "doe21.bibtex").write_text(
+        "@article{doe21,\n  title = {Example}\n}\n",
+    )
+    monkeypatch.setattr(references, "esmvaltool_directory", lambda: tmp_path)
+    references.tags.cache_clear()
+    yield
+    references.tags.cache_clear()
+
+
+TAGS_RECIPE = dedent("""\
+    documentation:
+      authors:
+        - doe_jane
+      maintainer: [doe_jane, unknown]
+      references:
+        - doe21
+    diagnostics:
+      diag:
+        themes:
+          - phys
+    """)
+
+
+def _hover_tag(split_cursor: SplitCursor, old: str, new: str) -> str | None:
+    text, position = split_cursor(TAGS_RECIPE.replace(old, new))
+    result = hover(text, position, MISSING, recipe_schema())
+    if result is None:
+        return None
+    assert isinstance(result.contents, types.MarkupContent)
+    return result.contents.value
+
+
+@pytest.mark.usefixtures("esmvaltool")
+def test_hover_author(split_cursor: SplitCursor) -> None:
+    value = _hover_tag(split_cursor, "- doe_jane", "- doe|_jane")
+    assert value == (
+        "Author `doe_jane`:\n\n"
+        "- name: Doe, Jane\n"
+        "- institute: Example Institute"
+    )
+
+
+@pytest.mark.usefixtures("esmvaltool")
+def test_hover_maintainer_in_flow_list(split_cursor: SplitCursor) -> None:
+    value = _hover_tag(split_cursor, "[doe_jane", "[doe|_jane")
+    assert value is not None
+    assert value.startswith("Author `doe_jane`:")
+
+
+@pytest.mark.usefixtures("esmvaltool")
+def test_hover_unknown_author(split_cursor: SplitCursor) -> None:
+    value = _hover_tag(split_cursor, "unknown]", "unk|nown]")
+    assert value is not None
+    assert value.startswith("Maintainers")
+
+
+@pytest.mark.usefixtures("esmvaltool")
+def test_hover_reference(split_cursor: SplitCursor) -> None:
+    value = _hover_tag(split_cursor, "doe21", "doe|21")
+    assert value == (
+        "Reference `doe21`:\n\n"
+        "```bibtex\n@article{doe21,\n  title = {Example}\n}\n```"
+    )
+
+
+@pytest.mark.usefixtures("esmvaltool")
+def test_hover_theme(split_cursor: SplitCursor) -> None:
+    value = _hover_tag(split_cursor, "phys", "ph|ys")
+    assert value == "Theme `phys`: physics"
 
 
 def _definition(split_cursor: SplitCursor, text: str) -> types.Location | None:
