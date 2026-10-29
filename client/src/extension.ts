@@ -9,9 +9,12 @@ import {
   ServerOptions,
 } from "vscode-languageclient/node";
 
+import { Mode, RECIPE_SELECTOR, SchemaFallback } from "./schema";
+
 const SERVER_MODULE = "esmvaltool_language_server";
 
 let client: LanguageClient | undefined;
+let fallback: SchemaFallback | undefined;
 
 // Starting the server takes a few seconds, so restarts can be requested
 // while one is still in progress. Starts and stops run one at a time, so
@@ -23,10 +26,16 @@ function enqueue(operation: () => Promise<void>): Promise<void> {
   return queue;
 }
 
-export async function activate(
-  context: vscode.ExtensionContext,
-): Promise<void> {
+/** The API of this extension, used by its tests. */
+export interface Api {
+  readonly mode: Mode;
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<Api> {
+  const schemaFallback = new SchemaFallback(context.globalStorageUri);
+  fallback = schemaFallback;
   context.subscriptions.push(
+    schemaFallback,
     vscode.commands.registerCommand(
       "esmvaltool.restartLanguageServer",
       restart,
@@ -44,6 +53,11 @@ export async function activate(
     );
   }
   await enqueue(start);
+  return {
+    get mode() {
+      return schemaFallback.mode;
+    },
+  };
 }
 
 export async function deactivate(): Promise<void> {
@@ -68,6 +82,10 @@ async function start(): Promise<void> {
           void vscode.commands.executeCommand("python.setInterpreter");
         }
       });
+    await fallback?.useSchema(
+      python,
+      `The language server is not installed in the environment of ${python}.`,
+    );
     return;
   }
   const serverOptions: ServerOptions = {
@@ -75,17 +93,26 @@ async function start(): Promise<void> {
     args: ["-m", SERVER_MODULE],
   };
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [
-      { scheme: "file", language: "yaml", pattern: "**/recipe*.{yml,yaml}" },
-    ],
+    documentSelector: [RECIPE_SELECTOR],
   };
-  client = new LanguageClient(
+  const starting = new LanguageClient(
     "esmvaltool",
     "ESMValTool",
     serverOptions,
     clientOptions,
   );
-  await client.start();
+  try {
+    await starting.start();
+  } catch (error) {
+    await starting.dispose().catch(() => undefined);
+    await fallback?.useSchema(
+      python,
+      `The language server failed to start: ${String(error)}.`,
+    );
+    return;
+  }
+  client = starting;
+  fallback?.useServer(python);
 }
 
 async function stop(): Promise<void> {

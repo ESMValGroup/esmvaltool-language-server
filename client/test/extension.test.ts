@@ -153,4 +153,38 @@ describe("ESMValTool extension", () => {
     const texts = await hovers(document, positionOf(document, "regrid:", 1));
     assert.equal(texts.length, 1);
   });
+
+  it("falls back to the schema without the language server", async () => {
+    const extension = vscode.extensions.getExtension<{ mode: string }>(
+      "ESMValGroup.esmvaltool",
+    );
+    assert.ok(extension);
+    const api = extension.exports;
+    const settings = vscode.workspace.getConfiguration(
+      "esmvaltool.languageServer",
+    );
+    // Other extensions, including the YAML extension, are disabled in the
+    // tests, so recipes cannot be checked against the schema either.
+    await settings.update(
+      "pythonPath",
+      "/does/not/exist/python",
+      vscode.ConfigurationTarget.Global,
+    );
+    try {
+      await waitFor(
+        () => (api.mode === "none" ? true : undefined),
+        "the fallback",
+      );
+    } finally {
+      await settings.update(
+        "pythonPath",
+        undefined,
+        vscode.ConfigurationTarget.Global,
+      );
+    }
+    await waitFor(
+      () => (api.mode === "server" ? true : undefined),
+      "the language server",
+    );
+  });
 });
