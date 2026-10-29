@@ -1,0 +1,179 @@
+"""Tests for completion, hover, and go to definition."""
+
+from __future__ import annotations
+
+from textwrap import dedent
+from typing import TYPE_CHECKING
+
+import yaml
+from lsprotocol import types
+
+from esmvaltool_language_server.completion import completions
+from esmvaltool_language_server.definition import definition
+from esmvaltool_language_server.hover import hover
+from esmvaltool_language_server.schema import MISSING, recipe_schema
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    SplitCursor = Callable[[str], tuple[str, types.Position]]
+
+URI = "file:///recipe_test.yml"
+
+RECIPE = dedent("""\
+    documentation:
+      title: Example
+    preprocessors:
+      pp:
+        regrid:
+          target_grid: 1x1
+          scheme: linear
+      other:
+        anomalies:
+          period: month
+    diagnostics:
+      diag:
+        variables:
+          tas:
+            preprocessor: pp
+            project: CMIP6
+            mip: Amon
+        scripts:
+          script1:
+            script: examples/diagnostic.py
+            ancestors: [diag/tas]
+    """)
+
+
+def _complete(split_cursor: SplitCursor, old: str, new: str) -> list[str]:
+    assert old in RECIPE
+    text, position = split_cursor(RECIPE.replace(old, new))
+    items = completions(
+        text,
+        position,
+        yaml.safe_load(RECIPE),
+        recipe_schema(),
+    )
+    return [item.label for item in items]
+
+
+def test_complete_top_level_keys(split_cursor: SplitCursor) -> None:
+    labels = _complete(split_cursor, "diagnostics:\n", "diagnostics:\nd|\n")
+    assert labels == ["datasets"]
+
+
+def test_complete_steps(split_cursor: SplitCursor) -> None:
+    labels = _complete(
+        split_cursor,
+        "      scheme: linear\n",
+        "      scheme: linear\n    ext|\n",
+    )
+    assert "extract_region" in labels
+    assert "regrid" not in labels
+
+
+def test_complete_step_key_text(split_cursor: SplitCursor) -> None:
+    text, position = split_cursor(
+        RECIPE.replace("  other:\n", "  other:\n    ext|\n")
+    )
+    items = completions(text, position, MISSING, recipe_schema())
+    (item,) = [item for item in items if item.label == "extract_region"]
+    assert isinstance(item.text_edit, types.TextEdit)
+    assert item.text_edit.new_text == "extract_region: "
+    assert item.text_edit.range.start.character == 4
+    assert isinstance(item.documentation, types.MarkupContent)
+    assert "Extract a region" in item.documentation.value
+
+
+def test_complete_mip(split_cursor: SplitCursor) -> None:
+    labels = _complete(split_cursor, "mip: Amon", "mip: A|")
+    assert "Amon" in labels
+    assert "Omon" in labels
+
+
+def test_complete_preprocessor(split_cursor: SplitCursor) -> None:
+    labels = _complete(
+        split_cursor,
+        "preprocessor: pp",
+        "preprocessor: |",
+    )
+    assert labels == ["pp", "other"]
+
+
+def test_complete_ancestors(split_cursor: SplitCursor) -> None:
+    labels = _complete(split_cursor, "[diag/tas]", "[diag/tas, |]")
+    assert labels == ["diag/*", "diag/tas", "diag/script1"]
+
+
+def test_hover_step(split_cursor: SplitCursor) -> None:
+    text, position = split_cursor(RECIPE.replace("regrid:", "reg|rid:"))
+    result = hover(text, position, MISSING, recipe_schema())
+    assert result is not None
+    assert isinstance(result.contents, types.MarkupContent)
+    assert result.contents.value.startswith("Perform horizontal regridding.")
+    assert result.range == types.Range(
+        start=types.Position(line=4, character=4),
+        end=types.Position(line=4, character=10),
+    )
+
+
+def test_hover_preprocessor(split_cursor: SplitCursor) -> None:
+    text, position = split_cursor(RECIPE.replace(": pp", ": p|p"))
+    result = hover(text, position, yaml.safe_load(RECIPE), recipe_schema())
+    assert result is not None
+    assert isinstance(result.contents, types.MarkupContent)
+    assert "target_grid: 1x1" in result.contents.value
+
+
+def test_hover_value(split_cursor: SplitCursor) -> None:
+    text, position = split_cursor(RECIPE.replace("CMIP6", "CM|IP6"))
+    assert hover(text, position, MISSING, recipe_schema()) is None
+
+
+def _definition(split_cursor: SplitCursor, text: str) -> types.Location | None:
+    text, position = split_cursor(text)
+    return definition(text, position, URI)
+
+
+def test_definition_preprocessor(split_cursor: SplitCursor) -> None:
+    location = _definition(split_cursor, RECIPE.replace(": pp", ": p|p"))
+    assert location == types.Location(
+        uri=URI,
+        range=types.Range(
+            start=types.Position(line=3, character=2),
+            end=types.Position(line=3, character=4),
+        ),
+    )
+
+
+def test_definition_ancestor(split_cursor: SplitCursor) -> None:
+    location = _definition(
+        split_cursor, RECIPE.replace("diag/tas]", "diag/t|as]")
+    )
+    assert location is not None
+    assert location.range.start == types.Position(line=13, character=6)
+
+
+def test_definition_ancestor_wildcard(split_cursor: SplitCursor) -> None:
+    location = _definition(
+        split_cursor, RECIPE.replace("diag/tas]", "diag/|*]")
+    )
+    assert location is not None
+    assert location.range.start == types.Position(line=11, character=2)
+
+
+def test_definition_script(split_cursor: SplitCursor, tmp_path: Path) -> None:
+    script = tmp_path / "diagnostic.py"
+    script.write_text("")
+    location = _definition(
+        split_cursor,
+        RECIPE.replace("examples/diagnostic.py", f"{script}|"),
+    )
+    assert location is not None
+    assert location.uri == script.as_uri()
+
+
+def test_definition_invalid_yaml(split_cursor: SplitCursor) -> None:
+    text = RECIPE.replace(": pp", ": p|p") + "invalid: [\n"
+    assert _definition(split_cursor, text) is None

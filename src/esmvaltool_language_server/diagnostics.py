@@ -6,6 +6,8 @@ import yaml
 from esmvalcore.recipe import RecipeIssue, validate_recipe
 from lsprotocol import types
 
+from esmvaltool_language_server.schema import MISSING
+
 SOURCE = "esmvaltool"
 
 SEVERITIES = {
@@ -29,14 +31,31 @@ def recipe_diagnostics(text: str) -> list[types.Diagnostic]:
         of the problems in the recipe content, because the content cannot be
         read.
     """
+    return check_recipe(text)[1]
+
+
+def check_recipe(text: str) -> tuple[object, list[types.Diagnostic]]:
+    """Load a recipe and find its problems.
+
+    Parameters
+    ----------
+    text:
+        The YAML text of the recipe.
+
+    Returns
+    -------
+    :
+        The recipe, or :obj:`~esmvaltool_language_server.schema.MISSING` if
+        it is not valid YAML, and the problems in the recipe.
+    """
     lines = text.splitlines()
     try:
         recipe = yaml.safe_load(text)
     except yaml.MarkedYAMLError as exc:
-        return [_syntax_diagnostic(exc, lines)]
+        return MISSING, [_syntax_diagnostic(exc, lines)]
     except yaml.YAMLError as exc:
-        return [_diagnostic(str(exc), 0, 0, lines)]
-    return [
+        return MISSING, [_diagnostic(str(exc), 0, 0, lines)]
+    return recipe, [
         _issue_diagnostic(issue, lines)
         for issue in validate_recipe(recipe, text)
     ]

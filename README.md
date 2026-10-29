@@ -17,9 +17,16 @@ authors and references it defines.
 - Problems in recipes, as you type: unknown preprocessor functions and
   arguments, invalid values, missing keys, unknown projects and MIP tables,
   keys that are defined more than once, and YAML syntax errors.
+- Completion of keys and values: preprocessor functions and their
+  arguments, facets, projects, the MIP tables of the project, and branding
+  suffixes; the preprocessors and tasks defined in the recipe; and, if
+  ESMValTool is installed, its diagnostic scripts, authors, and references.
+- Documentation of preprocessor functions and other keys, and of
+  preprocessors, when you hover over them.
+- Go to the definition of a preprocessor, of a task listed in `ancestors`,
+  or of a diagnostic script.
 
-Planned: completion, hover documentation, go to definition, and running a
-recipe from the editor.
+Planned: running a recipe from the editor.
 
 ## Installation
 
@@ -30,20 +37,57 @@ Install it in the environment where ESMValTool is installed:
 pip install esmvaltool-language-server
 ```
 
-Then install the ESMValTool extension in Visual Studio Code.
+Then set up your editor as described below.
+Other editors can start the server with the command
+`esmvaltool-language-server --stdio`, which communicates over stdin and
+stdout.
+
+### Visual Studio Code
+
+Install the ESMValTool extension.
 It uses the Python interpreter that is selected in the
 [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python),
 or the one in the setting `esmvaltool.languageServer.pythonPath`.
-It checks files whose name starts with `recipe` and ends with `.yml` or
-`.yaml`.
-
-Other editors can start the server with the command
-`esmvaltool-language-server`, which communicates over stdin and stdout.
+In a workspace with multiple folders, put this setting in the workspace
+settings: Visual Studio Code ignores it in the settings of a folder.
+The extension checks files whose name starts with `recipe` and ends with
+`.yml` or `.yaml`.
 
 The
 [YAML extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml)
-with the recipe JSON Schema reports many of the same problems.
-If you use both, these problems are shown twice.
+with the recipe JSON Schema reports many of the same problems and offers
+many of the same suggestions.
+If you use both, these are shown twice, so do not configure the YAML
+extension to use the recipe schema.
+
+### Emacs
+
+Use [Eglot](https://www.gnu.org/software/emacs/manual/html_mono/eglot.html),
+which is included in Emacs 29 and later.
+Add this to your Emacs configuration:
+
+```elisp
+(define-derived-mode esmvaltool-recipe-mode yaml-mode "Recipe"
+  "Major mode for ESMValTool recipes.")
+(add-to-list 'auto-mode-alist
+             '("/recipe[^/]*\\.ya?ml\\'" . esmvaltool-recipe-mode))
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '((esmvaltool-recipe-mode :language-id "yaml")
+                 . ("esmvaltool-language-server" "--stdio"))))
+(add-hook 'esmvaltool-recipe-mode-hook #'eglot-ensure)
+```
+
+This defines a mode for recipes, so the server is only used for recipes and
+not for other YAML files.
+It requires [yaml-mode](https://github.com/yoshiki/yaml-mode); if you use
+`yaml-ts-mode` instead, replace `yaml-mode` by `yaml-ts-mode`.
+If the environment where the server is installed is not active when Emacs
+starts, replace `"esmvaltool-language-server"` by the full path to the
+command, for example `"/path/to/env/bin/esmvaltool-language-server"`.
+Problems are shown with Flymake, completion works with
+`completion-at-point`, documentation is shown by ElDoc, and `M-.` goes to a
+definition.
 
 ## Development
 

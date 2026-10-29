@@ -1,7 +1,7 @@
 {
   "name": "esmvaltool",
   "displayName": "ESMValTool",
-  "description": "Check ESMValTool recipes while you write them.",
+  "description": "Check, complete, and navigate ESMValTool recipes.",
   "version": "0.1.0",
   "publisher": "ESMValGroup",
   "license": "Apache-2.0",
@@ -28,6 +28,15 @@
         "category": "ESMValTool"
       }
     ],
+    "configurationDefaults": {
+      "[yaml]": {
+        "editor.quickSuggestions": {
+          "other": true,
+          "comments": false,
+          "strings": true
+        }
+      }
+    },
     "configuration": {
       "title": "ESMValTool",
       "properties": {
