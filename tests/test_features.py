@@ -9,14 +9,14 @@ import pytest
 import yaml
 from lsprotocol import types
 
-from esmvaltool_language_server import references
-from esmvaltool_language_server.completion import completions
+from esmvaltool_language_server import completion, references
+from esmvaltool_language_server.completion import Options, completions
 from esmvaltool_language_server.definition import definition
 from esmvaltool_language_server.hover import hover
 from esmvaltool_language_server.schema import MISSING, recipe_schema
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Mapping
     from pathlib import Path
 
     SplitCursor = Callable[[str], tuple[str, types.Position]]
@@ -93,7 +93,7 @@ def _snippet(split_cursor: SplitCursor, old: str, new: str, label: str) -> str:
     assert old in RECIPE
     text, position = split_cursor(RECIPE.replace(old, new))
     items = completions(
-        text, position, MISSING, recipe_schema(), snippets=True
+        text, position, MISSING, recipe_schema(), Options(snippets=True)
     )
     (item,) = [item for item in items if item.label == label]
     assert isinstance(item.text_edit, types.TextEdit)
@@ -150,6 +150,133 @@ def test_complete_branding_suffix(split_cursor: SplitCursor) -> None:
     assert "tavg-h2m-hxy-u" in labels
     # Branding suffixes of other variables in the table.
     assert "tavg-u-hxy-u" not in labels
+
+
+@pytest.mark.parametrize("new", ["mip: |", "mip: [Amon, |]"])
+def test_complete_available_facet_values(
+    split_cursor: SplitCursor,
+    new: str,
+) -> None:
+    calls = []
+
+    def facet_values(
+        project: str,
+        facets: Mapping[object, object],
+        facet: str,
+    ) -> list[str] | None:
+        calls.append((project, facets.get("short_name"), facet))
+        return ["Omon", "Amon"]
+
+    text, position = split_cursor(RECIPE.replace("mip: Amon", new))
+    items = completions(
+        text,
+        position,
+        yaml.safe_load(RECIPE),
+        recipe_schema(),
+        Options(facet_values=facet_values),
+    )
+    assert [item.label for item in items] == ["Amon", "Omon"]
+    assert calls == [("CMIP6", "tas", "mip")]
+
+
+def test_complete_facet_values_not_found(split_cursor: SplitCursor) -> None:
+    text, position = split_cursor(RECIPE.replace("mip: Amon", "mip: A|"))
+    items = completions(
+        text,
+        position,
+        yaml.safe_load(RECIPE),
+        recipe_schema(),
+        Options(facet_values=lambda *_: None),
+    )
+    # The values that the schema allows are suggested instead.
+    assert "Omon" in [item.label for item in items]
+
+
+@pytest.mark.parametrize(
+    ("facet", "values", "labels"),
+    [
+        ("tier", ["2", "3"], ["2", "3"]),
+        ("version", ["1", "v2"], ["'1'", "v2"]),
+    ],
+)
+def test_complete_facet_values_types(
+    split_cursor: SplitCursor,
+    facet: str,
+    values: list[str],
+    labels: list[str],
+) -> None:
+    """Values are numbers if the schema does not allow a string."""
+    text, position = split_cursor(RECIPE.replace("mip: Amon", f"{facet}: |"))
+    items = completions(
+        text,
+        position,
+        yaml.safe_load(RECIPE),
+        recipe_schema(),
+        Options(facet_values=lambda *_: values),
+    )
+    assert [item.label for item in items] == labels
+
+
+@pytest.mark.parametrize(
+    ("dataset", "hidden"),
+    [
+        ("{project: OBS, |}", {"exp", "ensemble"}),
+        ("{project: CMIP6, |}", {"tier"}),
+        ("{project: 'OBS*', |}", set()),
+        ("{project: other, |}", set()),
+    ],
+)
+def test_complete_keys_without_unused_facets(
+    split_cursor: SplitCursor,
+    dataset: str,
+    hidden: set[str],
+) -> None:
+    unused = {"OBS": {"exp", "ensemble"}, "CMIP6": {"tier"}}
+    text = (
+        "diagnostics:\n"
+        "  diag:\n"
+        "    variables:\n"
+        "      tas:\n"
+        "        mip: Amon\n"
+        "        additional_datasets:\n"
+        f"          - {dataset}\n"
+    )
+    text, position = split_cursor(text)
+    items = completions(
+        text,
+        position,
+        yaml.safe_load(text),
+        recipe_schema(),
+        Options(unused_facets=lambda project: unused.get(project, set())),
+    )
+    labels = {item.label for item in items}
+    assert not labels & hidden
+    assert {"dataset", "start_year", "alias", "tier", "exp"} - hidden <= labels
+
+
+@pytest.mark.parametrize("path", [(), (0,), ("datasets", 0, 1)])
+def test_no_facet_values_without_facet(path: tuple[str | int, ...]) -> None:
+    recipe = {"datasets": [{"project": "CMIP6"}]}
+    assert completion._available_values(path, recipe, lambda *_: ["A"]) == []
+
+
+def test_complete_branding_suffix_available(
+    split_cursor: SplitCursor,
+) -> None:
+    old = "project: CMIP6\n        mip: Amon"
+    new = "project: CMIP7\n        mip: atmos\n        branding_suffix: |"
+    text, position = split_cursor(RECIPE.replace(old, new))
+    recipe = yaml.safe_load(RECIPE.replace(old, new.replace("|", "")))
+    items = completions(
+        text,
+        position,
+        recipe,
+        recipe_schema(),
+        Options(facet_values=lambda *_: ["tavg-h2m-hxy-u"]),
+    )
+    assert [item.label for item in items] == ["tavg-h2m-hxy-u"]
+    # The description from the CMOR table is kept.
+    assert items[0].documentation is not None
 
 
 def test_complete_preprocessor(split_cursor: SplitCursor) -> None:

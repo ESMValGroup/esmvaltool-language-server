@@ -5,7 +5,7 @@ from textwrap import dedent
 import pytest
 import yaml
 
-from esmvaltool_language_server.cmor import branding_suffixes
+from esmvaltool_language_server.cmor import branding_suffixes, dataset_facets
 from esmvaltool_language_server.schema import MISSING
 
 RECIPE = yaml.safe_load(
@@ -107,3 +107,65 @@ def test_branding_suffixes_unknown_project() -> None:
     }
     path = ("diagnostics", "diag", "variables", "tas", "branding_suffix")
     assert branding_suffixes(path, recipe) == {}
+
+
+SUPPLEMENTARY_RECIPE = yaml.safe_load(
+    dedent(
+        """
+        diagnostics:
+          diag:
+            variables:
+              tas:
+                mip: Amon
+                ensemble: r1i1p1
+                supplementary_variables:
+                  - {short_name: sftlf, mip: fx}
+                  - {short_name: areacella, mip: fx}
+                additional_datasets:
+                  - project: CMIP5
+                    dataset: CanESM2
+                    supplementary_variables:
+                      - {short_name: sftlf, ensemble: r0i0p0}
+        """,
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (
+            (
+                "diagnostics",
+                "diag",
+                "variables",
+                "tas",
+                "additional_datasets",
+                0,
+                "supplementary_variables",
+                0,
+            ),
+            {"short_name": "sftlf", "mip": "fx", "ensemble": "r0i0p0"},
+        ),
+        (
+            (
+                "diagnostics",
+                "diag",
+                "variables",
+                "tas",
+                "supplementary_variables",
+                1,
+            ),
+            {"short_name": "areacella", "mip": "fx", "ensemble": "r1i1p1"},
+        ),
+    ],
+)
+def test_supplementary_facets(
+    path: tuple[str | int, ...],
+    expected: dict[str, str],
+) -> None:
+    [facets] = dataset_facets(path, SUPPLEMENTARY_RECIPE)
+    assert "supplementary_variables" not in facets
+    assert facets["project"] == "CMIP5"
+    assert facets["dataset"] == "CanESM2"
+    assert {key: facets[key] for key in expected} == expected
