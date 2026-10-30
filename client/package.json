@@ -63,7 +63,7 @@
   },
   "dependencies": {
     "@vscode/python-extension": "1.0.6",
-    "vscode-languageclient": "10.1.2"
+    "vscode-languageclient": "11.0.0"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -72,11 +72,11 @@
     "@types/vscode": "1.93.0",
     "@vscode/test-cli": "0.0.15",
     "@vscode/test-electron": "3.1.0",
-    "@vscode/vsce": "3.6.2",
+    "@vscode/vsce": "4.0.0",
     "esbuild": "0.28.2",
     "eslint": "10.13.0",
     "prettier": "3.9.10",
-    "typescript": "5.9.3",
+    "typescript": "6.0.3",
     "typescript-eslint": "8.72.0"
   }
 }
