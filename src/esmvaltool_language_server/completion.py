@@ -20,6 +20,7 @@ from esmvaltool_language_server.schema import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Mapping
+    from collections.abc import Set as AbstractSet
 
     from esmvaltool_language_server.context import Path
     from esmvaltool_language_server.schema import JSONSchema
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
     ]
     """Get the available values of a facet from the project, the facets of
     the dataset, and the facet, or None if they are not known yet."""
+
+    UnusedFacets = Callable[[str], AbstractSet[str]]
+    """Get the facets that are not used to find the data of a project."""
 
 # Keys whose values are only collections, so the value starts on the next
 # line.
@@ -49,10 +53,14 @@ class Options:
         Get the values of a facet of the available datasets. If given, these
         are suggested for facets instead of the values that the schema
         allows.
+    unused_facets:
+        Get the facets that are not used to find the data of a project. If
+        given, these are not suggested as keys of datasets of the project.
     """
 
     snippets: bool = False
     facet_values: FacetValues | None = None
+    unused_facets: UnusedFacets | None = None
 
 
 def completions(
@@ -100,7 +108,7 @@ def completions(
                 recipe,
                 schema,
                 edit_range,
-                snippets=options.snippets,
+                options,
             ),
         )
     if context.kind in {"value", "item"}:
@@ -127,17 +135,26 @@ def _key_items(
     recipe: object,
     schema: RecipeSchema,
     edit_range: types.Range,
-    *,
-    snippets: bool,
+    options: Options,
 ) -> Iterable[types.CompletionItem]:
     data = data_at(recipe, context.path)
     existing = set(data) - {context.word} if isinstance(data, dict) else set()
+    if options.unused_facets is not None:
+        existing |= _unused_facets(
+            context.path,
+            recipe,
+            options.unused_facets,
+        )
     for key, nodes in schema.properties(
         schema.at(context.path, recipe)
     ).items():
         if key in existing:
             continue
-        text = _key_snippet(key, nodes, schema, context) if snippets else None
+        text = (
+            _key_snippet(key, nodes, schema, context)
+            if options.snippets
+            else None
+        )
         yield types.CompletionItem(
             label=key,
             kind=types.CompletionItemKind.Property,
@@ -156,6 +173,22 @@ def _key_items(
                 else text,
             ),
         )
+
+
+def _unused_facets(
+    path: Path,
+    recipe: object,
+    unused_facets: UnusedFacets,
+) -> set[str]:
+    """Get the facets that none of the datasets at a path use."""
+    unused: set[str] | None = None
+    for facets in cmor.dataset_facets(path, recipe):
+        project = facets.get("project")
+        if not cmor.is_name(project):
+            return set()
+        facets_ = set(unused_facets(str(project)))
+        unused = facets_ if unused is None else unused & facets_
+    return unused or set()
 
 
 def _key_text(key: str, nodes: list[JSONSchema], schema: RecipeSchema) -> str:
@@ -234,7 +267,10 @@ def _value_items(
                 types.CompletionItemKind.EnumMember,
                 documentation.get(label),
             )
-            for label in map(to_yaml, available)
+            for label in (
+                to_yaml(_typed(value, schema.types(nodes)))
+                for value in available
+            )
         ]
     if references.is_preprocessor(path):
         candidates.extend(
@@ -286,6 +322,16 @@ def _available_values(
         if cmor.is_name(project):
             values.update(facet_values(str(project), facets, path[-1]) or [])
     return sorted(values)
+
+
+def _typed(value: str, allowed: set[str]) -> object:
+    """Convert a value to a number if the schema does not allow a string."""
+    if "string" in allowed or not allowed & {"integer", "number"}:
+        return value
+    number = yaml.safe_load(value)
+    if isinstance(number, int | float) and not isinstance(number, bool):
+        return number
+    return value
 
 
 def preprocessor_documentation(name: str, preprocessor: object) -> str:

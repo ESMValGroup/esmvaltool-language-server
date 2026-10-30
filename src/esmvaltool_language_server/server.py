@@ -19,9 +19,9 @@ from esmvaltool_language_server import __version__, references
 from esmvaltool_language_server.completion import Options, completions
 from esmvaltool_language_server.definition import definition
 from esmvaltool_language_server.diagnostics import check_recipe
-from esmvaltool_language_server.esgf import FacetSearch
 from esmvaltool_language_server.hover import hover
 from esmvaltool_language_server.schema import MISSING, recipe_schema
+from esmvaltool_language_server.search import FacetSearch, unused_facets
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +196,7 @@ async def completion(
             Options(
                 snippets=_supports_snippets(ls.client_capabilities),
                 facet_values=facet_values,
+                unused_facets=unused_facets,
             ),
         )
 

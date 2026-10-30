@@ -192,6 +192,68 @@ def test_complete_facet_values_not_found(split_cursor: SplitCursor) -> None:
     assert "Omon" in [item.label for item in items]
 
 
+@pytest.mark.parametrize(
+    ("facet", "values", "labels"),
+    [
+        ("tier", ["2", "3"], ["2", "3"]),
+        ("version", ["1", "v2"], ["'1'", "v2"]),
+    ],
+)
+def test_complete_facet_values_types(
+    split_cursor: SplitCursor,
+    facet: str,
+    values: list[str],
+    labels: list[str],
+) -> None:
+    """Values are numbers if the schema does not allow a string."""
+    text, position = split_cursor(RECIPE.replace("mip: Amon", f"{facet}: |"))
+    items = completions(
+        text,
+        position,
+        yaml.safe_load(RECIPE),
+        recipe_schema(),
+        Options(facet_values=lambda *_: values),
+    )
+    assert [item.label for item in items] == labels
+
+
+@pytest.mark.parametrize(
+    ("dataset", "hidden"),
+    [
+        ("{project: OBS, |}", {"exp", "ensemble"}),
+        ("{project: CMIP6, |}", {"tier"}),
+        ("{project: 'OBS*', |}", set()),
+        ("{project: other, |}", set()),
+    ],
+)
+def test_complete_keys_without_unused_facets(
+    split_cursor: SplitCursor,
+    dataset: str,
+    hidden: set[str],
+) -> None:
+    unused = {"OBS": {"exp", "ensemble"}, "CMIP6": {"tier"}}
+    text = (
+        "diagnostics:\n"
+        "  diag:\n"
+        "    variables:\n"
+        "      tas:\n"
+        "        mip: Amon\n"
+        "        additional_datasets:\n"
+        f"          - {dataset}\n"
+    )
+    text, position = split_cursor(text)
+    items = completions(
+        text,
+        position,
+        yaml.safe_load(text),
+        recipe_schema(),
+        Options(unused_facets=lambda project: unused.get(project, set())),
+    )
+    labels = {item.label for item in items}
+    assert not labels & hidden
+    assert {"dataset", "start_year", "alias", "tier", "exp"} - hidden <= labels
+
+
 @pytest.mark.parametrize("path", [(), (0,), ("datasets", 0, 1)])
 def test_no_facet_values_without_facet(path: tuple[str | int, ...]) -> None:
     recipe = {"datasets": [{"project": "CMIP6"}]}

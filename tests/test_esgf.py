@@ -12,7 +12,7 @@ from intake_esgf.core.stac import STACESGFIndex
 from esmvaltool_language_server import esgf
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Iterator
 
 
 class _Response:
@@ -257,69 +257,6 @@ def test_is_searchable(indices: list[esgf.Index]) -> None:
     assert not esgf.is_searchable("CMIP6", "project")
     assert not esgf.is_searchable("CMIP6", "preprocessor")
     assert not esgf.is_searchable("OBS6", "dataset")
-
-
-def test_facet_search(
-    indices: list[esgf.Index],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    searches = []
-
-    def facet_values(
-        project: str,
-        facets: Mapping[object, object],
-        facet: str,
-    ) -> list[str]:
-        searches.append((project, dict(facets), facet))
-        return ["A"]
-
-    monkeypatch.setattr(esgf, "facet_values", facet_values)
-    search = esgf.FacetSearch()
-    facets = {"exp": "historical", "preprocessor": "pp", "dataset": "B"}
-    future = search.submit("CMIP6", facets, "dataset")
-    assert future is not None
-    assert future.result() == ["A"]
-    # Facets that are not used in the search do not start a new search.
-    other = search.submit("CMIP6", {**facets, "preprocessor": "x"}, "dataset")
-    assert other is future
-    new = search.submit("CMIP6", {**facets, "exp": "ssp585"}, "dataset")
-    assert new is not None
-    new.result()
-    assert searches == [
-        ("CMIP6", {"exp": "historical"}, "dataset"),
-        ("CMIP6", {"exp": "ssp585"}, "dataset"),
-    ]
-    assert search.submit("CMIP6", facets, "preprocessor") is None
-
-
-def test_facet_search_expires(
-    indices: list[esgf.Index],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(esgf, "facet_values", lambda *_: ["A"])
-    search = esgf.FacetSearch(max_age=0)
-    first = search.submit("CMIP6", {}, "dataset")
-    assert first is not None
-    first.result()
-    second = search.submit("CMIP6", {}, "dataset")
-    assert second is not None
-    assert second is not first
-    second.result()
-
-
-def test_facet_search_error(
-    indices: list[esgf.Index],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    def facet_values(*_: object) -> list[str]:
-        raise RuntimeError
-
-    monkeypatch.setattr(esgf, "facet_values", facet_values)
-    future = esgf.FacetSearch().submit("CMIP6", {}, "dataset")
-    assert future is not None
-    assert future.result() == []
-    assert "Failed to get the values of dataset on ESGF" in caplog.text
 
 
 def test_indices(monkeypatch: pytest.MonkeyPatch) -> None:

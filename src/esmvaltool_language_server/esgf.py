@@ -16,8 +16,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import logging
-import time
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -35,7 +34,7 @@ from intake_esgf.core.stac import STACESGFIndex
 from esmvaltool_language_server.cmor import is_name
 
 if TYPE_CHECKING:
-    from collections.abc import Hashable, Mapping
+    from collections.abc import Mapping
 
     Index = GlobusESGFIndex | SolrESGFIndex | STACESGFIndex
     Query = dict[str, list[str]]
@@ -309,8 +308,19 @@ def _index_values(
         return {}
 
 
-def _known_facets(project: str) -> set[str]:
-    """Get the facets of a project that are known on the enabled indices."""
+def known_facets(project: str) -> set[str]:
+    """Get the facets of a project that are known on the enabled indices.
+
+    Parameters
+    ----------
+    project:
+        The project.
+
+    Returns
+    -------
+    :
+        The facets.
+    """
     return {
         facet
         for mapping in (_mapping(index, project) for index in _indices())
@@ -334,7 +344,7 @@ def is_searchable(project: str, facet: str) -> bool:
     :
         Whether the facet is known on one of the enabled indices.
     """
-    return facet != "project" and facet in _known_facets(project)
+    return facet != "project" and facet in known_facets(project)
 
 
 def facet_values(
@@ -375,70 +385,3 @@ def facet_values(
 
     with ThreadPoolExecutor(max_workers=max(len(jobs), 1)) as pool:
         return sorted(set().union(*pool.map(search, jobs)))
-
-
-def _search(
-    project: str,
-    facets: Mapping[object, object],
-    facet: str,
-) -> list[str]:
-    try:
-        return facet_values(project, facets, facet)
-    except Exception:
-        logger.exception("Failed to get the values of %s on ESGF", facet)
-        return []
-
-
-class FacetSearch:
-    """Find the values of facets on ESGF in the background.
-
-    Parameters
-    ----------
-    max_age:
-        Search again after this many seconds.
-    """
-
-    def __init__(self, max_age: float = 600) -> None:
-        self.max_age = max_age
-        self._executor = ThreadPoolExecutor(max_workers=4)
-        self._searches: dict[Hashable, tuple[float, Future[list[str]]]] = {}
-
-    def submit(
-        self,
-        project: str,
-        facets: Mapping[object, object],
-        facet: str,
-    ) -> Future[list[str]] | None:
-        """Start finding the values of a facet, unless it has been started.
-
-        Parameters
-        ----------
-        project:
-            The project of the datasets.
-        facets:
-            The facets of the datasets.
-        facet:
-            The facet to get the values of.
-
-        Returns
-        -------
-        :
-            The values, see :func:`facet_values`. None if they cannot be found
-            on ESGF.
-        """
-        if not is_searchable(project, facet):
-            return None
-        # Only search again if the facets that are used in the search change.
-        known = _known_facets(project) - {facet, "project"}
-        relevant = {k: v for k, v in facets.items() if k in known}
-        key = (project, facet, repr(sorted(relevant.items(), key=str)))
-        now = time.monotonic()
-        self._searches = {
-            k: (start, future)
-            for k, (start, future) in self._searches.items()
-            if now - start < self.max_age or not future.done()
-        }
-        if key not in self._searches:
-            future = self._executor.submit(_search, project, relevant, facet)
-            self._searches[key] = (now, future)
-        return self._searches[key][1]
