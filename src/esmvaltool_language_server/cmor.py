@@ -76,25 +76,11 @@ def _datasets(
     )
 
 
-def dataset_facets(path: Path, recipe: object) -> list[dict[object, object]]:
-    """Get the facets of the datasets that the mapping at a path is part of.
-
-    The facets of a dataset override those of the variable group, like in
-    ESMValCore.
-
-    Parameters
-    ----------
-    path:
-        The path of a variable group or a dataset.
-    recipe:
-        The recipe.
-
-    Returns
-    -------
-    :
-        The facets of each dataset. Empty if the path is not the path of a
-        variable group or a dataset.
-    """
+def _pairs(
+    path: Path,
+    recipe: object,
+) -> list[tuple[str, dict[object, object], dict[object, object]]]:
+    """Get the variable groups and datasets at a path."""
     match path:
         case ("diagnostics", str(diagnostic), "variables", str(group)):
             variable = _as_mapping(data_at(recipe, path))
@@ -126,11 +112,59 @@ def dataset_facets(path: Path, recipe: object) -> list[dict[object, object]]:
                 for _, group, variable in _variable_groups(recipe)
             ]
         case _:
-            return []
-    return [
-        {"short_name": group, **variable, **dataset}
-        for group, variable, dataset in pairs
-    ]
+            pairs = []
+    return pairs
+
+
+def _supplementary(
+    variable: dict[object, object],
+    dataset: dict[object, object],
+    supplementary: dict[object, object],
+) -> dict[object, object]:
+    """Merge the definitions of a supplementary variable, like ESMValCore."""
+    short_name = supplementary.get("short_name")
+    merged: dict[object, object] = {}
+    for item in _mappings(child(variable, "supplementary_variables")) + (
+        _mappings(child(dataset, "supplementary_variables"))
+    ):
+        if item.get("short_name") == short_name:
+            merged.update(item)
+    return {**merged, **supplementary}
+
+
+def dataset_facets(path: Path, recipe: object) -> list[dict[object, object]]:
+    """Get the facets of the datasets that the mapping at a path is part of.
+
+    The facets of a dataset override those of the variable group, like in
+    ESMValCore. The facets of a supplementary variable override those of the
+    dataset that it belongs to.
+
+    Parameters
+    ----------
+    path:
+        The path of a variable group, a dataset, or a supplementary variable.
+    recipe:
+        The recipe.
+
+    Returns
+    -------
+    :
+        The facets of each dataset. Empty if the path is not the path of a
+        variable group, a dataset, or a supplementary variable.
+    """
+    supplementary = None
+    match path:
+        case (*parent, "supplementary_variables", int()):
+            supplementary = _as_mapping(data_at(recipe, path))
+            path = tuple(parent)
+    facets = []
+    for group, variable, dataset in _pairs(path, recipe):
+        item = {"short_name": group, **variable, **dataset}
+        if supplementary is not None:
+            item.pop("supplementary_variables", None)
+            item.update(_supplementary(variable, dataset, supplementary))
+        facets.append(item)
+    return facets
 
 
 @functools.cache
