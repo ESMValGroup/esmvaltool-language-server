@@ -3,11 +3,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sys
+from concurrent.futures import Future
 from typing import TYPE_CHECKING
 
 import pytest
+import yaml
 from lsprotocol import types
 from pygls.lsp.client import LanguageClient
+from pygls.workspace import Workspace
+
+from esmvaltool_language_server import server
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -126,3 +131,60 @@ async def test_server_features(tmp_path: Path) -> None:
                 end=types.Position(line=1, character=4),
             ),
         )
+
+
+class _FacetSearch:
+    """Return a future that has not finished."""
+
+    def __init__(self) -> None:
+        self.future: Future[list[str]] = Future()
+
+    def submit(self, *_: object) -> Future[list[str]]:
+        return self.future
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("found", [True, False])
+async def test_completion_waits_for_facet_search(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    found: bool,
+) -> None:
+    monkeypatch.setattr(server, "FACET_SEARCH_SECONDS", 0.1)
+    ls = server.RecipeLanguageServer()
+    ls.protocol._workspace = Workspace(None)
+    ls.protocol.client_capabilities = types.ClientCapabilities()
+    uri = "file:///recipe_test.yml"
+    text = (
+        "diagnostics:\n"
+        "  diag:\n"
+        "    variables:\n"
+        "      tas: {project: CMIP6, mip: Amon, exp: }\n"
+    )
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri=uri,
+            language_id="yaml",
+            version=1,
+            text=text,
+        ),
+    )
+    ls.recipes[uri] = yaml.safe_load(text)
+    search = _FacetSearch()
+    ls.facet_search = search  # type: ignore[assignment]
+    if found:
+        asyncio.get_running_loop().call_later(
+            0.01,
+            search.future.set_result,
+            ["historical"],
+        )
+    result = await server.completion(
+        ls,
+        types.CompletionParams(
+            text_document=types.TextDocumentIdentifier(uri=uri),
+            position=types.Position(line=3, character=44),
+        ),
+    )
+    labels = [item.label for item in result.items]
+    assert result.is_incomplete is not found
+    assert (labels == ["historical"]) is found

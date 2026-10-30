@@ -10,12 +10,16 @@ from lsprotocol import types
 from pygls.lsp.server import LanguageServer
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from concurrent.futures import Future
+
     from pygls.workspace import TextDocument
 
 from esmvaltool_language_server import __version__, references
-from esmvaltool_language_server.completion import completions
+from esmvaltool_language_server.completion import Options, completions
 from esmvaltool_language_server.definition import definition
 from esmvaltool_language_server.diagnostics import check_recipe
+from esmvaltool_language_server.esgf import FacetSearch
 from esmvaltool_language_server.hover import hover
 from esmvaltool_language_server.schema import MISSING, recipe_schema
 
@@ -24,6 +28,10 @@ logger = logging.getLogger(__name__)
 # Wait this long after the last change before checking a recipe, so it is not
 # checked after every keystroke.
 DEBOUNCE_SECONDS = 0.3
+
+# Wait this long for the values of a facet to be found on ESGF before
+# suggesting other values.
+FACET_SEARCH_SECONDS = 2.0
 
 
 class RecipeLanguageServer(LanguageServer):
@@ -40,6 +48,7 @@ class RecipeLanguageServer(LanguageServer):
         # to decide which suggestions apply while the recipe is not valid
         # YAML.
         self.recipes: dict[str, object] = {}
+        self.facet_search = FacetSearch()
 
     def schedule_check(self, uri: str, delay: float = 0.0) -> None:
         """Check a recipe after a delay, replacing an earlier check."""
@@ -155,7 +164,7 @@ def did_close(
     types.TEXT_DOCUMENT_COMPLETION,
     types.CompletionOptions(trigger_characters=["/"]),
 )
-def completion(
+async def completion(
     ls: RecipeLanguageServer,
     params: types.CompletionParams,
 ) -> types.CompletionList:
@@ -163,20 +172,50 @@ def completion(
     uri = params.text_document.uri
     document = ls.workspace.get_text_document(uri)
     codec = document.position_codec
-    items = completions(
-        document.source,
-        _position(document, params.position),
-        ls.recipes.get(uri, MISSING),
-        recipe_schema(),
-        snippets=_supports_snippets(ls.client_capabilities),
-    )
+    pending: list[Future[list[str]]] = []
+
+    def facet_values(
+        project: str,
+        facets: Mapping[object, object],
+        facet: str,
+    ) -> list[str] | None:
+        future = ls.facet_search.submit(project, facets, facet)
+        if future is None:
+            return None
+        if future.done():
+            return future.result()
+        pending.append(future)
+        return None
+
+    def complete() -> list[types.CompletionItem]:
+        return completions(
+            document.source,
+            _position(document, params.position),
+            ls.recipes.get(uri, MISSING),
+            recipe_schema(),
+            Options(
+                snippets=_supports_snippets(ls.client_capabilities),
+                facet_values=facet_values,
+            ),
+        )
+
+    items = complete()
+    if pending:
+        await asyncio.wait(
+            [asyncio.wrap_future(future) for future in pending],
+            timeout=FACET_SEARCH_SECONDS,
+        )
+        pending.clear()
+        items = complete()
     for item in items:
         if isinstance(item.text_edit, types.TextEdit):
             item.text_edit.range = codec.range_to_client_units(
                 document.lines,
                 item.text_edit.range,
             )
-    return types.CompletionList(is_incomplete=False, items=items)
+    # Ask the editor to request the suggestions again while the values of
+    # facets are still being searched for.
+    return types.CompletionList(is_incomplete=bool(pending), items=items)
 
 
 def _supports_snippets(capabilities: types.ClientCapabilities) -> bool:

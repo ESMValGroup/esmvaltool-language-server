@@ -19,8 +19,19 @@ if TYPE_CHECKING:
 _GLOB_CHARS = frozenset("*?[")
 
 
-def _is_name(value: object) -> bool:
-    """Check if a facet value is a single name, not a pattern or list."""
+def is_name(value: object) -> bool:
+    """Check if a facet value is a single name, not a pattern or list.
+
+    Parameters
+    ----------
+    value:
+        The facet value.
+
+    Returns
+    -------
+    :
+        Whether the value is a string without glob patterns.
+    """
     return isinstance(value, str) and not _GLOB_CHARS & set(value)
 
 
@@ -65,11 +76,24 @@ def _datasets(
     )
 
 
-def _facets(path: Path, recipe: object) -> list[dict[object, object]]:
+def dataset_facets(path: Path, recipe: object) -> list[dict[object, object]]:
     """Get the facets of the datasets that the mapping at a path is part of.
 
-    The path is the path of a variable group or a dataset. The facets of a
-    dataset override those of the variable group, like in ESMValCore.
+    The facets of a dataset override those of the variable group, like in
+    ESMValCore.
+
+    Parameters
+    ----------
+    path:
+        The path of a variable group or a dataset.
+    recipe:
+        The recipe.
+
+    Returns
+    -------
+    :
+        The facets of each dataset. Empty if the path is not the path of a
+        variable group or a dataset.
     """
     match path:
         case ("diagnostics", str(diagnostic), "variables", str(group)):
@@ -161,11 +185,11 @@ def branding_suffixes(path: Path, recipe: object) -> dict[str, str]:
     if not path or path[-1] != "branding_suffix":
         return {}
     suffixes: dict[str, str] = {}
-    for facets in _facets(path[:-1], recipe):
+    for facets in dataset_facets(path[:-1], recipe):
         project = facets.get("project")
         mip = facets.get("mip")
         short_name = facets.get("short_name")
-        if not (_is_name(project) and _is_name(short_name)) or not isinstance(
+        if not (is_name(project) and is_name(short_name)) or not isinstance(
             mip, str
         ):
             continue

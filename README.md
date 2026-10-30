@@ -25,6 +25,15 @@ authors and references it defines.
   branding suffixes of the variable; the preprocessors and tasks defined in the recipe; and, if
   ESMValTool is installed, its diagnostic scripts, authors, and references.
   Keys are inserted with the arguments they require or their default value.
+- Completion of the facets of datasets on ESGF, such as `dataset`, `exp`,
+  and `ensemble`, with the values of the datasets that match the other
+  facets of the variable and dataset.
+  The values are found on the ESGF indices that are enabled in the
+  [intake-esgf configuration](https://intake-esgf.readthedocs.io/en/latest/configure.html),
+  so the facets in the recipe are sent to these indices.
+  Finding the values takes less than a second; until then, the values that
+  the recipe schema allows are suggested.
+  The values are remembered for 10 minutes.
 - Documentation of preprocessor functions and other keys, their values, and
   preprocessors, with default values, when you hover over them.
   If ESMValTool is installed, hovering over an author, project, theme, or

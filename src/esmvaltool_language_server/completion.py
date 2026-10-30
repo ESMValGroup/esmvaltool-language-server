@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import yaml
@@ -18,13 +19,40 @@ from esmvaltool_language_server.schema import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable, Mapping
 
+    from esmvaltool_language_server.context import Path
     from esmvaltool_language_server.schema import JSONSchema
+
+    FacetValues = Callable[
+        [str, Mapping[object, object], str], list[str] | None
+    ]
+    """Get the available values of a facet from the project, the facets of
+    the dataset, and the facet, or None if they are not known yet."""
 
 # Keys whose values are only collections, so the value starts on the next
 # line.
 _COLLECTION_TYPES = frozenset({"array", "object", "null"})
+
+
+@dataclass(frozen=True)
+class Options:
+    """Options for suggesting keys and values.
+
+    Parameters
+    ----------
+    snippets:
+        Whether the editor supports snippets. If it does, keys are inserted
+        with their default value or the keys that their value requires, as
+        placeholders.
+    facet_values:
+        Get the values of a facet of the available datasets. If given, these
+        are suggested for facets instead of the values that the schema
+        allows.
+    """
+
+    snippets: bool = False
+    facet_values: FacetValues | None = None
 
 
 def completions(
@@ -32,8 +60,7 @@ def completions(
     position: types.Position,
     recipe: object,
     schema: RecipeSchema,
-    *,
-    snippets: bool = False,
+    options: Options | None = None,
 ) -> list[types.CompletionItem]:
     """Suggest keys and values at a position in a recipe.
 
@@ -49,10 +76,8 @@ def completions(
         :obj:`~esmvaltool_language_server.schema.MISSING` if there is none.
     schema:
         The recipe schema.
-    snippets:
-        Whether the editor supports snippets. If it does, keys are inserted
-        with their default value or the keys that their value requires, as
-        placeholders.
+    options:
+        Options for the suggestions.
 
     Returns
     -------
@@ -62,6 +87,7 @@ def completions(
     context = context_at(text, position.line, position.character)
     if context is None:
         return []
+    options = options or Options()
     edit_range = types.Range(
         start=types.Position(line=position.line, character=context.start),
         end=position,
@@ -69,10 +95,24 @@ def completions(
     items: list[types.CompletionItem] = []
     if context.kind in {"key", "item"}:
         items.extend(
-            _key_items(context, recipe, schema, edit_range, snippets=snippets),
+            _key_items(
+                context,
+                recipe,
+                schema,
+                edit_range,
+                snippets=options.snippets,
+            ),
         )
     if context.kind in {"value", "item"}:
-        items.extend(_value_items(context, recipe, schema, edit_range))
+        items.extend(
+            _value_items(
+                context,
+                recipe,
+                schema,
+                edit_range,
+                options.facet_values,
+            ),
+        )
     return items
 
 
@@ -162,6 +202,7 @@ def _value_items(
     recipe: object,
     schema: RecipeSchema,
     edit_range: types.Range,
+    facet_values: FacetValues | None,
 ) -> Iterable[types.CompletionItem]:
     path = context.path
     nodes = schema.at(path, recipe)
@@ -182,6 +223,18 @@ def _value_items(
         candidates = [
             (to_yaml(suffix), types.CompletionItemKind.EnumMember, text)
             for suffix, text in suffixes.items()
+        ]
+    if facet_values is not None and (
+        available := _available_values(path, recipe, facet_values)
+    ):
+        documentation = {label: text for label, _, text in candidates}
+        candidates = [
+            (
+                label,
+                types.CompletionItemKind.EnumMember,
+                documentation.get(label),
+            )
+            for label in map(to_yaml, available)
         ]
     if references.is_preprocessor(path):
         candidates.extend(
@@ -214,6 +267,25 @@ def _value_items(
             preselect=label == default_label or None,
             text_edit=types.TextEdit(range=edit_range, new_text=label),
         )
+
+
+def _available_values(
+    path: Path,
+    recipe: object,
+    facet_values: FacetValues,
+) -> list[str]:
+    """Get the values of the facet at a path of the available datasets."""
+    if path and isinstance(path[-1], int):
+        # An item in a list of values.
+        path = path[:-1]
+    if not path or not isinstance(path[-1], str):
+        return []
+    values: set[str] = set()
+    for facets in cmor.dataset_facets(path[:-1], recipe):
+        project = facets.get("project")
+        if cmor.is_name(project):
+            values.update(facet_values(str(project), facets, path[-1]) or [])
+    return sorted(values)
 
 
 def preprocessor_documentation(name: str, preprocessor: object) -> str:
