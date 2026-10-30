@@ -7,7 +7,8 @@ instead of searching for the datasets, which can take minutes.
 The facet names and values in the recipe are translated to those on ESGF with
 the configuration of the intake-esgf data source of ESMValCore for Globus and
 STAC indices, and with the facet mapping of :mod:`esmvalcore.io.esgf` for
-Solr indices.
+Solr indices. The version is not part of these mappings, ESMValCore adds the
+prefix "v" to the version of a dataset on ESGF.
 """
 
 from __future__ import annotations
@@ -52,6 +53,9 @@ _MAX_VALUES = 1000
 # Errors when an index cannot be reached or gives an unexpected answer.
 _ERRORS = (requests.RequestException, globus_sdk.GlobusError, LookupError)
 
+# The prefix that ESMValCore adds to the version of a dataset on ESGF.
+_VERSION_PREFIX = "v"
+
 
 @dataclasses.dataclass(frozen=True)
 class _Mapping:
@@ -69,12 +73,19 @@ class _Mapping:
             values = facets.get(ours)
             values = values if isinstance(values, list) else [values]
             if ours != facet and values and all(map(is_name, values)):
-                translate = self.values.get(ours, {})
-                query[theirs] = [translate.get(v, v) for v in values]
+                query[theirs] = [self._esgf_value(ours, v) for v in values]
         return query
+
+    def _esgf_value(self, facet: str, value: str) -> str:
+        """Translate a value in a recipe to the value on ESGF."""
+        if facet == "version":
+            return value.removeprefix(_VERSION_PREFIX)
+        return self.values.get(facet, {}).get(value, value)
 
     def value(self, facet: str, value: str) -> str:
         """Translate a value on ESGF to the value in a recipe."""
+        if facet == "version":
+            return f"{_VERSION_PREFIX}{value}"
         for ours, theirs in self.values.get(facet, {}).items():
             if theirs == value:
                 return ours
@@ -96,7 +107,10 @@ def _intake_esgf_mapping(project: str) -> _Mapping | None:
     for settings in (CFG["projects"], _intake_esgf_configuration()):
         for source in settings.get(project, {}).get("data", {}).values():
             if source.get("type") == _INTAKE_ESGF_DATA_SOURCE:
-                return _Mapping(source["facets"], source.get("values", {}))
+                return _Mapping(
+                    {**source["facets"], "version": "version"},
+                    source.get("values", {}),
+                )
     return None
 
 
@@ -104,7 +118,7 @@ def _solr_mapping(project: str) -> _Mapping | None:
     if project not in FACETS:
         return None
     return _Mapping(
-        {"project": "project", **FACETS[project]},
+        {"project": "project", **FACETS[project], "version": "version"},
         {"dataset": DATASET_MAP.get(project, {})},
     )
 

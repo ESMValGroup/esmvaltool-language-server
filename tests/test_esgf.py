@@ -80,6 +80,17 @@ def test_intake_esgf_mapping() -> None:
     assert mapping.value("dataset", "CanESM2") == "CanESM2"
 
 
+@pytest.mark.parametrize(
+    "mapping",
+    [esgf._intake_esgf_mapping("CMIP6"), esgf._solr_mapping("CMIP6")],
+)
+def test_version_mapping(mapping: esgf._Mapping | None) -> None:
+    assert mapping is not None
+    query = mapping.query({"version": "v20190429"}, "dataset")
+    assert query == {"version": ["20190429"]}
+    assert mapping.value("version", "20190429") == "v20190429"
+
+
 def test_unknown_project_mapping() -> None:
     assert esgf._intake_esgf_mapping("OBS6") is None
     assert esgf._solr_mapping("OBS6") is None
