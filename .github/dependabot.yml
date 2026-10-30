@@ -17,7 +17,28 @@ updates:
       default-days: 7
     labels:
       - dependencies
+    ignore:
+      # Must match the oldest VSCode version in `engines` in package.json.
+      - dependency-name: "@types/vscode"
+      # Must match the Node version of the oldest supported VSCode.
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
+      # Not yet supported by typescript-eslint.
+      - dependency-name: typescript
+        versions:
+          - ">=7"
+    # Propose major updates, which may need changes to the code, separately
+    # from the others, so these can be merged without waiting for them.
     groups:
       npm:
         patterns:
           - "*"
+        update-types:
+          - minor
+          - patch
+      npm-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
