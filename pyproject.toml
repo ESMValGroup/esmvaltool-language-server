@@ -58,11 +58,9 @@ addopts = [
 ]
 markers = [
     "network: tests that need internet access, run with `pixi run test-links`",
-]
-testpaths = ["tests"]
-markers = [
     "online: tests that download from the internet, deselect with '-m \"not online\"'",
 ]
+testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
