@@ -28,6 +28,7 @@ dependencies = [
     "esmvalcore>=2.16.0.dev0",
     "globus-sdk",
     "intake-esgf",
+    "pybtex",
     "pygls>=2.0",
     "pyyaml",
     "requests",
@@ -59,6 +60,9 @@ markers = [
     "network: tests that need internet access, run with `pixi run test-links`",
 ]
 testpaths = ["tests"]
+markers = [
+    "online: tests that download from the internet, deselect with '-m \"not online\"'",
+]
 
 [tool.coverage.run]
 branch = true
@@ -175,6 +179,7 @@ pyrefly = "*"
 pytest = "*"
 pytest-asyncio = "*"
 pytest-cov = "*"
+pytest-mock = "*"
 ruff = "*"
 types-jsonschema = "*"
 types-pyyaml = "*"

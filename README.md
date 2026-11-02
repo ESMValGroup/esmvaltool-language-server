@@ -39,9 +39,23 @@ authors and references it defines.
   The values are remembered for 10 minutes.
 - Documentation of preprocessor functions and other keys, their values, and
   preprocessors, with default values, when you hover over them.
-  If ESMValTool is installed, hovering over an author, project, theme, or
-  realm shows its definition in `config-references.yml`, and hovering over
-  a reference shows its bibtex entry.
+  Hovering over the value of a facet, such as `dataset`, `exp`,
+  `activity`, `institute`, `grid`, or `ensemble`, shows its description
+  in the controlled vocabulary of the project, for example CMIP6 or CMIP7,
+  that is included in the CMOR tables that ESMValCore uses.
+  CMIP7 models are described by, and linked to, their
+  [Essential Model Documentation](https://wcrp-cmip.github.io/Essential-Model-Documentation/),
+  which is downloaded when you hover over them.
+  Hovering over the value of the `project` facet, such as `CMIP6`, links
+  to the website of the project, or for projects without a website, such as
+  `OBS6`, `native6`, or `ICON`, to the ESMValTool or ESMValCore
+  documentation.
+  If ESMValTool is installed, hovering over an author shows their name and
+  institute, with links to their ORCID and GitHub profile, hovering over a
+  project, theme, or realm shows its definition in `config-references.yml`,
+  and hovering over a reference shows its first author, year, and title,
+  with a link to its DOI.
+  If the bibtex file of a reference cannot be read, its content is shown.
   The server reads `config-references.yml` and the list of bibtex files only
   once, so restart it after changing that file or adding a bibtex file.
   In Visual Studio Code, press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>
@@ -50,6 +64,9 @@ authors and references it defines.
   `M-x eglot-reconnect`.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
   or of a diagnostic script.
+  If ESMValTool is installed, go to the definition of an author, project,
+  theme, or realm in `config-references.yml`, or open the bibtex file of a
+  reference.
 
 Planned: running a recipe from the editor.
 

@@ -319,7 +319,10 @@ def test_hover_value(split_cursor: SplitCursor) -> None:
     result = hover(text, position, MISSING, recipe_schema())
     assert result is not None
     assert isinstance(result.contents, types.MarkupContent)
-    assert result.contents.value == "Project, for example CMIP6."
+    assert result.contents.value == (
+        "Project, for example CMIP6.\n\n"
+        "`CMIP6`: [Project website](https://wcrp-cmip.org/cmip-phases/cmip6/)"
+    )
 
 
 def test_hover_default(split_cursor: SplitCursor) -> None:
@@ -355,18 +358,25 @@ def esmvaltool(
                 name: Doe, Jane
                 institute: Example Institute
                 orcid:
+                github: janedoe
             themes:
               phys: physics
             """),
     )
     (tmp_path / "references").mkdir()
     (tmp_path / "references" / "doe21.bibtex").write_text(
-        "@article{doe21,\n  title = {Example}\n}\n",
+        "@article{doe21,\n  author = {Doe, Jane},\n  title = {Example},\n"
+        "  year = 2021,\n  doi = {10.1000/xyz}\n}\n",
+    )
+    (tmp_path / "references" / "roe22.bibtex").write_text(
+        "@article{roe22,\n  title = {Example\n",
     )
     monkeypatch.setattr(references, "esmvaltool_directory", lambda: tmp_path)
     references.tags.cache_clear()
+    references._tag_lines.cache_clear()
     yield
     references.tags.cache_clear()
+    references._tag_lines.cache_clear()
 
 
 TAGS_RECIPE = dedent("""\
@@ -376,6 +386,7 @@ TAGS_RECIPE = dedent("""\
       maintainer: [doe_jane, unknown]
       references:
         - doe21
+        - roe22
     diagnostics:
       diag:
         themes:
@@ -396,9 +407,8 @@ def _hover_tag(split_cursor: SplitCursor, old: str, new: str) -> str | None:
 def test_hover_author(split_cursor: SplitCursor) -> None:
     value = _hover_tag(split_cursor, "- doe_jane", "- doe|_jane")
     assert value == (
-        "Author `doe_jane`:\n\n"
-        "- name: Doe, Jane\n"
-        "- institute: Example Institute"
+        "Author `doe_jane`: **Jane Doe**, Example Institute\n\n"
+        "[@janedoe](https://github.com/janedoe)"
     )
 
 
@@ -420,8 +430,16 @@ def test_hover_unknown_author(split_cursor: SplitCursor) -> None:
 def test_hover_reference(split_cursor: SplitCursor) -> None:
     value = _hover_tag(split_cursor, "doe21", "doe|21")
     assert value == (
-        "Reference `doe21`:\n\n"
-        "```bibtex\n@article{doe21,\n  title = {Example}\n}\n```"
+        "Reference `doe21`: [Doe (2021): Example](https://doi.org/10.1000/xyz)"
+    )
+
+
+@pytest.mark.usefixtures("esmvaltool")
+def test_hover_unreadable_reference(split_cursor: SplitCursor) -> None:
+    value = _hover_tag(split_cursor, "roe22", "roe|22")
+    assert value == (
+        "Reference `roe22`:\n\n"
+        "```bibtex\n@article{roe22,\n  title = {Example\n```"
     )
 
 
@@ -429,6 +447,43 @@ def test_hover_reference(split_cursor: SplitCursor) -> None:
 def test_hover_theme(split_cursor: SplitCursor) -> None:
     value = _hover_tag(split_cursor, "phys", "ph|ys")
     assert value == "Theme `phys`: physics"
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    [
+        (
+            "mip: Amon",
+            "mip: Amon\n        exp: [ssp585, historical]",
+            "`historical`: all-forcing simulation",
+        ),
+        (
+            "mip: Amon",
+            (
+                "mip: Amon\n        additional_datasets:\n"
+                "          - {dataset: CESM2, grid: gn}"
+            ),
+            "`gn`: data reported on a model's native grid",
+        ),
+    ],
+)
+def test_hover_controlled_vocabulary(
+    split_cursor: SplitCursor,
+    old: str,
+    new: str,
+    expected: str,
+) -> None:
+    recipe_text = RECIPE.replace(old, new)
+    value = expected.split("`")[1]
+    text, position = split_cursor(
+        recipe_text.replace(f" {value}", f" {value[0]}|{value[1:]}"),
+    )
+    result = hover(
+        text, position, yaml.safe_load(recipe_text), recipe_schema()
+    )
+    assert result is not None
+    assert isinstance(result.contents, types.MarkupContent)
+    assert expected in result.contents.value
 
 
 def test_hover_branding_suffix(split_cursor: SplitCursor) -> None:
@@ -488,6 +543,40 @@ def test_definition_script(split_cursor: SplitCursor, tmp_path: Path) -> None:
     )
     assert location is not None
     assert location.uri == script.as_uri()
+
+
+@pytest.mark.usefixtures("esmvaltool")
+@pytest.mark.parametrize(
+    ("edit", "file", "line"),
+    [
+        (("- doe_jane", "- doe|_jane"), "config-references.yml", 1),
+        (("[doe_jane", "[doe|_jane"), "config-references.yml", 1),
+        (("- phys", "- ph|ys"), "config-references.yml", 7),
+        (("doe21", "doe|21"), "references/doe21.bibtex", 0),
+    ],
+)
+def test_definition_tag(
+    split_cursor: SplitCursor,
+    tmp_path: Path,
+    edit: tuple[str, str],
+    file: str,
+    line: int,
+) -> None:
+    location = _definition(split_cursor, TAGS_RECIPE.replace(*edit))
+    assert location is not None
+    assert location.uri == (tmp_path / file).as_uri()
+    assert location.range.start == types.Position(line=line, character=0)
+
+
+@pytest.mark.usefixtures("esmvaltool")
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [("unknown]", "unk|nown]"), ("doe21", "doe|21x")],
+)
+def test_definition_unknown_tag(
+    split_cursor: SplitCursor, old: str, new: str
+) -> None:
+    assert _definition(split_cursor, TAGS_RECIPE.replace(old, new)) is None
 
 
 def test_definition_invalid_yaml(split_cursor: SplitCursor) -> None:
