@@ -319,7 +319,10 @@ def test_hover_value(split_cursor: SplitCursor) -> None:
     result = hover(text, position, MISSING, recipe_schema())
     assert result is not None
     assert isinstance(result.contents, types.MarkupContent)
-    assert result.contents.value == "Project, for example CMIP6."
+    assert result.contents.value == (
+        "Project, for example CMIP6.\n\n"
+        "`CMIP6`: [Project website](https://wcrp-cmip.org/cmip-phases/cmip6/)"
+    )
 
 
 def test_hover_default(split_cursor: SplitCursor) -> None:
@@ -446,6 +449,43 @@ def test_hover_theme(split_cursor: SplitCursor) -> None:
     assert value == "Theme `phys`: physics"
 
 
+@pytest.mark.parametrize(
+    ("old", "new", "expected"),
+    [
+        (
+            "mip: Amon",
+            "mip: Amon\n        exp: [ssp585, historical]",
+            "`historical`: all-forcing simulation",
+        ),
+        (
+            "mip: Amon",
+            (
+                "mip: Amon\n        additional_datasets:\n"
+                "          - {dataset: CESM2, grid: gn}"
+            ),
+            "`gn`: data reported on a model's native grid",
+        ),
+    ],
+)
+def test_hover_controlled_vocabulary(
+    split_cursor: SplitCursor,
+    old: str,
+    new: str,
+    expected: str,
+) -> None:
+    recipe_text = RECIPE.replace(old, new)
+    value = expected.split("`")[1]
+    text, position = split_cursor(
+        recipe_text.replace(f" {value}", f" {value[0]}|{value[1:]}"),
+    )
+    result = hover(
+        text, position, yaml.safe_load(recipe_text), recipe_schema()
+    )
+    assert result is not None
+    assert isinstance(result.contents, types.MarkupContent)
+    assert expected in result.contents.value
+
+
 def test_hover_branding_suffix(split_cursor: SplitCursor) -> None:
     old = "project: CMIP6\n        mip: Amon"
     new = "project: CMIP7\n        mip: atmos\n        branding_suffix: tavg-h2m-hxy-u"
@@ -511,7 +551,7 @@ def test_definition_script(split_cursor: SplitCursor, tmp_path: Path) -> None:
     [
         (("- doe_jane", "- doe|_jane"), "config-references.yml", 1),
         (("[doe_jane", "[doe|_jane"), "config-references.yml", 1),
-        (("- phys", "- ph|ys"), "config-references.yml", 6),
+        (("- phys", "- ph|ys"), "config-references.yml", 7),
         (("doe21", "doe|21"), "references/doe21.bibtex", 0),
     ],
 )

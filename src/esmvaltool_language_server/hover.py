@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from lsprotocol import types
 
-from esmvaltool_language_server import cmor, references, tags
+from esmvaltool_language_server import cmor, references, tags, vocabulary
 from esmvaltool_language_server.completion import preprocessor_documentation
 from esmvaltool_language_server.context import context_at
 from esmvaltool_language_server.schema import MISSING, RecipeSchema, data_at
@@ -92,17 +92,20 @@ def _value_documentation(
     recipe: object,
     schema: RecipeSchema,
 ) -> str | None:
-    """Describe a value by the documentation of its key."""
+    """Describe a value by the documentation of its key.
+
+    The branding suffixes of variables are also described by the variable,
+    and the values of other facets by the controlled vocabulary.
+    """
     description = schema.documentation(schema.at(path, recipe))
     if description is None and path and isinstance(path[-1], int):
         # Items of lists are described by the list.
         description = schema.documentation(schema.at(path[:-1], recipe))
-    variable = cmor.branding_suffixes(path, recipe).get(value)
-    if variable is not None:
-        return (
-            variable if description is None else f"{description}\n\n{variable}"
-        )
-    return description
+    details = cmor.branding_suffixes(path, recipe).get(
+        value,
+    ) or vocabulary.facet_documentation(path, value, recipe)
+    parts = [part for part in (description, details) if part is not None]
+    return "\n\n".join(parts) if parts else None
 
 
 def _tag_documentation(path: Path, name: str) -> str | None:
