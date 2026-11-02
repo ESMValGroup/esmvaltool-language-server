@@ -50,6 +50,12 @@ authors and references it defines.
   `M-x eglot-reconnect`.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
   or of a diagnostic script.
+- Formatting of recipes with `esmvalcore.recipe.format_recipe`, which puts
+  the sections of the recipe and the facets of the datasets and variables in
+  a standard order.
+  Formatting removes comments, so recipes with comments are not formatted.
+  In Visual Studio Code, run **Format Document With...** and select
+  ESMValTool if another extension can also format YAML files.
 
 Planned: running a recipe from the editor.
 
