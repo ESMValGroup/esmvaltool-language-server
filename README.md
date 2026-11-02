@@ -39,9 +39,12 @@ authors and references it defines.
   The values are remembered for 10 minutes.
 - Documentation of preprocessor functions and other keys, their values, and
   preprocessors, with default values, when you hover over them.
-  If ESMValTool is installed, hovering over an author, project, theme, or
-  realm shows its definition in `config-references.yml`, and hovering over
-  a reference shows its bibtex entry.
+  If ESMValTool is installed, hovering over an author shows their name and
+  institute, with links to their ORCID and GitHub profile, hovering over a
+  project, theme, or realm shows its definition in `config-references.yml`,
+  and hovering over a reference shows its first author, year, and title,
+  with a link to its DOI.
+  If the bibtex file of a reference cannot be read, its content is shown.
   The server reads `config-references.yml` and the list of bibtex files only
   once, so restart it after changing that file or adding a bibtex file.
   In Visual Studio Code, press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>

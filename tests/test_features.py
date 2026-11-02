@@ -355,13 +355,18 @@ def esmvaltool(
                 name: Doe, Jane
                 institute: Example Institute
                 orcid:
+                github: janedoe
             themes:
               phys: physics
             """),
     )
     (tmp_path / "references").mkdir()
     (tmp_path / "references" / "doe21.bibtex").write_text(
-        "@article{doe21,\n  title = {Example}\n}\n",
+        "@article{doe21,\n  author = {Doe, Jane},\n  title = {Example},\n"
+        "  year = 2021,\n  doi = {10.1000/xyz}\n}\n",
+    )
+    (tmp_path / "references" / "roe22.bibtex").write_text(
+        "@article{roe22,\n  title = {Example\n",
     )
     monkeypatch.setattr(references, "esmvaltool_directory", lambda: tmp_path)
     references.tags.cache_clear()
@@ -378,6 +383,7 @@ TAGS_RECIPE = dedent("""\
       maintainer: [doe_jane, unknown]
       references:
         - doe21
+        - roe22
     diagnostics:
       diag:
         themes:
@@ -398,9 +404,8 @@ def _hover_tag(split_cursor: SplitCursor, old: str, new: str) -> str | None:
 def test_hover_author(split_cursor: SplitCursor) -> None:
     value = _hover_tag(split_cursor, "- doe_jane", "- doe|_jane")
     assert value == (
-        "Author `doe_jane`:\n\n"
-        "- name: Doe, Jane\n"
-        "- institute: Example Institute"
+        "Author `doe_jane`: **Jane Doe**, Example Institute\n\n"
+        "[@janedoe](https://github.com/janedoe)"
     )
 
 
@@ -422,8 +427,16 @@ def test_hover_unknown_author(split_cursor: SplitCursor) -> None:
 def test_hover_reference(split_cursor: SplitCursor) -> None:
     value = _hover_tag(split_cursor, "doe21", "doe|21")
     assert value == (
-        "Reference `doe21`:\n\n"
-        "```bibtex\n@article{doe21,\n  title = {Example}\n}\n```"
+        "Reference `doe21`: [Doe (2021): Example](https://doi.org/10.1000/xyz)"
+    )
+
+
+@pytest.mark.usefixtures("esmvaltool")
+def test_hover_unreadable_reference(split_cursor: SplitCursor) -> None:
+    value = _hover_tag(split_cursor, "roe22", "roe|22")
+    assert value == (
+        "Reference `roe22`:\n\n"
+        "```bibtex\n@article{roe22,\n  title = {Example\n```"
     )
 
 
