@@ -312,3 +312,70 @@ def test_index_values(
 ) -> None:
     monkeypatch.setattr(esgf, function, lambda *_: {"A": 1})
     assert esgf._index_values(_index(cls), {}, "model") == {"A": 1}
+
+
+@pytest.fixture
+def solr_dates(monkeypatch: pytest.MonkeyPatch) -> list[esgf.Query]:
+    """Use a Solr index with the first and last dates of datasets."""
+    indices = [_index(GlobusESGFIndex), _index(SolrESGFIndex)]
+    monkeypatch.setattr(esgf, "_indices", lambda: indices)
+    queries: list[esgf.Query] = []
+    counts = {
+        "datetime_start": {
+            "1848-10-24T12:00:00Z": 2,
+            "1850-01-15T12:00:00Z": 31,
+        },
+        "datetime_stop": {
+            "1999-12-15T12:00:00Z": 1,
+            "2014-12-15T12:00:00Z": 30,
+        },
+    }
+
+    def index_values(
+        _index: esgf.Index,
+        query: esgf.Query,
+        field: str,
+    ) -> dict[str, int]:
+        queries.append(query)
+        return counts[field]
+
+    monkeypatch.setattr(esgf, "_index_values", index_values)
+    return queries
+
+
+@pytest.mark.parametrize(
+    ("facet", "expected"),
+    [
+        ("timerange", ["*", "1850/2014"]),
+        ("start_year", ["1850"]),
+        ("end_year", ["2014"]),
+    ],
+)
+def test_time_values(
+    solr_dates: list[esgf.Query],
+    facet: str,
+    expected: list[str],
+) -> None:
+    facets = {"dataset": "CESM2", "exp": "historical", "timerange": "*"}
+    assert esgf.is_searchable("CMIP6", facet)
+    assert esgf.facet_values("CMIP6", facets, facet) == expected
+    assert solr_dates[0] == {
+        "project": ["CMIP6"],
+        "source_id": ["CESM2"],
+        "experiment_id": ["historical"],
+    }
+
+
+def test_time_values_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+    solr_dates: list[esgf.Query],
+) -> None:
+    monkeypatch.setattr(esgf, "_index_values", lambda *_: {})
+    assert esgf.facet_values("CMIP6", {}, "timerange") == []
+    assert not solr_dates
+
+
+def test_time_values_unknown_project(solr_dates: list[esgf.Query]) -> None:
+    assert not esgf.is_searchable("OBS6", "timerange")
+    assert esgf.facet_values("OBS6", {}, "timerange") == []
+    assert not solr_dates

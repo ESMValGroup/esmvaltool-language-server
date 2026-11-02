@@ -16,6 +16,7 @@ FILES = (
     "Tier2/ERA5/OBS6_ERA5_reanaly_v1_day_tas_19900101-19911231.nc",
     "Tier2/ERA5/OBS6_ERA5_reanaly_v2_Amon_pr_199001-199112.nc",
     "Tier3/MSWEP/OBS6_MSWEP_reanaly_v1_Amon_pr_199001-199112.nc",
+    "Tier3/MSWEP/OBS6_MSWEP_reanaly_v1_Amon_pr_199201-199512.nc",
 )
 
 
@@ -69,6 +70,8 @@ def test_known_facets() -> None:
     assert not files.is_searchable("OBS6", "short_name")
     assert not files.is_searchable("OBS6", "exp")
     assert not files.is_searchable("CMIP6", "dataset")
+    assert files.is_searchable("OBS6", "timerange")
+    assert not files.is_searchable("CMIP6", "timerange")
 
 
 @pytest.mark.usefixtures("local_data")
@@ -82,6 +85,19 @@ def test_known_facets() -> None:
         ({"short_name": "tas", "mip": "Amon"}, "version", ["v1"]),
         ({"short_name": "tas", "preprocessor": "pp"}, "tier", ["2"]),
         ({"short_name": "ua"}, "dataset", []),
+        (
+            {"short_name": "pr", "dataset": "MSWEP"},
+            "timerange",
+            ["*", "1990/1995"],
+        ),
+        ({"short_name": "pr"}, "timerange", ["*", "1990/1991", "1990/1995"]),
+        (
+            {"short_name": "pr", "timerange": "2000/2001"},
+            "start_year",
+            ["1990"],
+        ),
+        ({"short_name": "pr"}, "end_year", ["1991", "1995"]),
+        ({"short_name": "ua"}, "timerange", []),
     ],
 )
 def test_facet_values(

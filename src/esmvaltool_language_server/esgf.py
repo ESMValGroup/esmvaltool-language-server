@@ -9,6 +9,8 @@ the configuration of the intake-esgf data source of ESMValCore for Globus and
 STAC indices, and with the facet mapping of :mod:`esmvalcore.io.esgf` for
 Solr indices. The version is not part of these mappings, ESMValCore adds the
 prefix "v" to the version of a dataset on ESGF.
+The time range of the datasets is only found on Solr indices, from the most
+common first and last date of the matching datasets.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from intake_esgf.core.globus import GlobusESGFIndex
 from intake_esgf.core.solr import SolrESGFIndex
 from intake_esgf.core.stac import STACESGFIndex
 
+from esmvaltool_language_server import timerange
 from esmvaltool_language_server.cmor import is_name
 
 if TYPE_CHECKING:
@@ -54,6 +57,9 @@ _ERRORS = (requests.RequestException, globus_sdk.GlobusError, LookupError)
 
 # The prefix that ESMValCore adds to the version of a dataset on ESGF.
 _VERSION_PREFIX = "v"
+
+# The fields of the first and last date of a dataset on Solr indices.
+_SOLR_DATES = ("datetime_start", "datetime_stop")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -342,8 +348,11 @@ def is_searchable(project: str, facet: str) -> bool:
     Returns
     -------
     :
-        Whether the facet is known on one of the enabled indices.
+        Whether the facet is known on one of the enabled indices, or selects
+        the time range and a Solr index is enabled.
     """
+    if facet in timerange.FACETS:
+        return bool(_solr_indices(project))
     return facet != "project" and facet in known_facets(project)
 
 
@@ -370,6 +379,8 @@ def facet_values(
     :
         The values, sorted. Indices that cannot be reached are skipped.
     """
+    if facet in timerange.FACETS:
+        return _time_values(project, facets, facet)
     jobs = [
         (index, mapping)
         for index in _indices()
@@ -385,3 +396,34 @@ def facet_values(
 
     with ThreadPoolExecutor(max_workers=max(len(jobs), 1)) as pool:
         return sorted(set().union(*pool.map(search, jobs)))
+
+
+def _solr_indices(project: str) -> list[SolrESGFIndex]:
+    """Get the enabled Solr indices, if they know the project."""
+    if _solr_mapping(project) is None:
+        return []
+    return [index for index in _indices() if isinstance(index, SolrESGFIndex)]
+
+
+def _time_values(
+    project: str,
+    facets: Mapping[object, object],
+    facet: str,
+) -> list[str]:
+    """Get the values of a time facet from the dates on Solr indices."""
+    indices = _solr_indices(project)
+    mapping = _solr_mapping(project)
+    if not indices or mapping is None:
+        return []
+    query = mapping.query({**facets, "project": project}, facet)
+
+    def search(index: SolrESGFIndex) -> tuple[str, str] | None:
+        start, end = (
+            max(counts, key=counts.__getitem__, default=None)
+            for counts in (_index_values(index, query, f) for f in _SOLR_DATES)
+        )
+        return None if start is None or end is None else (start, end)
+
+    with ThreadPoolExecutor(max_workers=len(indices)) as pool:
+        ranges = [found for found in pool.map(search, indices) if found]
+    return timerange.suggestions(facet, ranges)

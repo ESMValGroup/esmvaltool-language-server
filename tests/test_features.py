@@ -198,6 +198,8 @@ def test_complete_facet_values_not_found(split_cursor: SplitCursor) -> None:
         ("tier", ["2", "3"], ["2", "3"]),
         ("tier", ["2", "true"], ["2", "'true'"]),
         ("version", ["1", "v2"], ["'1'", "v2"]),
+        ("timerange", ["*", "1850/2014"], ["'*'", "1850/2014"]),
+        ("start_year", ["1850"], ["1850"]),
     ],
 )
 def test_complete_facet_values_types(

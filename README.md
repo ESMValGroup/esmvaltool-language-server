@@ -34,6 +34,10 @@ authors and references it defines.
   data sources that are configured in ESMValCore, such as local directories.
   The facets of the other data sources that can be completed are those in
   the templates of their paths.
+  The time range of the data, `timerange`, `start_year`, and `end_year`, is
+  completed from the dates of the files in the other data sources, and from
+  the most common first and last date of the datasets on the Solr indices of
+  ESGF; the other ESGF indices do not provide the dates of datasets.
   Finding the values usually takes less than a second; until then, the values
   that the recipe schema allows are suggested.
   The values are remembered for 10 minutes.
