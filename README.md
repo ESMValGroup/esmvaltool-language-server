@@ -68,6 +68,12 @@ authors and references it defines.
   theme, or realm in `config-references.yml`, or open the bibtex file of a
   reference.
 
+Other tools also use files named like recipes, for example `recipe.yaml` of
+conda-forge.
+The server ignores files that are not ESMValTool recipes: files with
+top-level keys, none of which is `documentation`, `datasets`,
+`preprocessors`, or `diagnostics`.
+
 Planned: running a recipe from the editor.
 
 ## Installation
