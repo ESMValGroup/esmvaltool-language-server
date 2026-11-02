@@ -319,7 +319,10 @@ def test_hover_value(split_cursor: SplitCursor) -> None:
     result = hover(text, position, MISSING, recipe_schema())
     assert result is not None
     assert isinstance(result.contents, types.MarkupContent)
-    assert result.contents.value == "Project, for example CMIP6."
+    assert result.contents.value == (
+        "Project, for example CMIP6.\n\n"
+        "`CMIP6`: [Project website](https://wcrp-cmip.org/cmip-phases/cmip6/)"
+    )
 
 
 def test_hover_default(split_cursor: SplitCursor) -> None:

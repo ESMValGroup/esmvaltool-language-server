@@ -4,6 +4,8 @@ The controlled vocabulary of a project is the ``<project>_CV.json`` file in
 its CMOR tables, for example ``CMIP6_CV.json`` for CMIP6. Projects that use
 the CMOR tables of another project, such as OBS6, do not use its controlled
 vocabulary.
+Projects are described by a link to their website, or to the documentation
+of ESMValTool or ESMValCore if they have none.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ from __future__ import annotations
 import functools
 import json
 import re
+from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
 from esmvalcore.cmor.table import get_tables
@@ -38,6 +41,44 @@ _SEPARATOR = re.compile(r"\n|;\s+(?![^()]*\))")
 
 # A variant label, e.g. r1i1p1f1.
 _VARIANT = re.compile(r"r(\d+)i(\d+)p(\d+)f(\d+)")
+
+# The websites of the projects.
+_PROJECT_URLS = {
+    "CMIP3": "https://wcrp-cmip.org/cmip-phases/cmip3/",
+    "CMIP5": "https://wcrp-cmip.org/cmip-phases/cmip5/",
+    "CMIP6": "https://wcrp-cmip.org/cmip-phases/cmip6/",
+    "CMIP7": "https://wcrp-cmip.org/cmip7/",
+    "CORDEX": "https://cordex.org/",
+    "CORDEX-CMIP6": "https://cordex.org/experiment-guidelines/cordex-cmip6/",
+    "obs4MIPs": "https://pcmdi.github.io/obs4MIPs/",
+}
+
+# The documentation of the packages, and the pages in it that describe the
+# projects without a website.
+_DOCS_URLS = {
+    "ESMValTool": "https://docs.esmvaltool.org/en/{version}",
+    "ESMValCore": "https://docs.esmvaltool.org/projects/ESMValCore/en/{version}",
+}
+_NATIVE_MODELS = (
+    "ESMValCore",
+    "quickstart/find_data.html#supported-native-models",
+)
+_PROJECT_DOCS = {
+    "OBS": ("ESMValTool", "input.html#observations"),
+    "OBS6": ("ESMValTool", "input.html#observations"),
+    "native6": (
+        "ESMValCore",
+        "quickstart/find_data.html#read-native-datasets",
+    ),
+    "ACCESS": _NATIVE_MODELS,
+    "CESM": _NATIVE_MODELS,
+    "EMAC": _NATIVE_MODELS,
+    "ICON": _NATIVE_MODELS,
+    "IPSLCM": _NATIVE_MODELS,
+}
+
+# A released version, which has its own documentation.
+_RELEASE = re.compile(r"\d+\.\d+\.\d+")
 
 # The Essential Model Documentation of the models of CMIP7.
 _EMD_URL = "https://wcrp-cmip.github.io/Essential-Model-Documentation/model"
@@ -187,6 +228,27 @@ def describe(project: str, facet: str, value: str) -> str | None:
     return f"`{value}`:{separator}{description}"
 
 
+@functools.cache
+def _docs_version(package: str) -> str:
+    """Get the version of the documentation of a package."""
+    try:
+        installed = version(package)
+    except PackageNotFoundError:
+        return "latest"
+    return f"v{installed}" if _RELEASE.fullmatch(installed) else "latest"
+
+
+def _describe_project(value: str) -> str | None:
+    """Link a project to its website or documentation."""
+    if url := _PROJECT_URLS.get(value):
+        return f"`{value}`: [Project website]({url})"
+    if value in _PROJECT_DOCS:
+        package, page = _PROJECT_DOCS[value]
+        docs = _DOCS_URLS[package].format(version=_docs_version(package))
+        return f"`{value}`: [{package} documentation]({docs}/{page})"
+    return None
+
+
 def facet_documentation(path: Path, value: str, recipe: object) -> str | None:
     """Describe the value of a facet at a path in a recipe.
 
@@ -203,12 +265,15 @@ def facet_documentation(path: Path, value: str, recipe: object) -> str | None:
     -------
     :
         The description in the controlled vocabulary of the first project
-        that describes the value, or :obj:`None`.
+        that describes the value, a link to the website or documentation of a
+        project, or :obj:`None`.
     """
     if path and isinstance(path[-1], int):
         path = path[:-1]
     if not path or not isinstance(facet := path[-1], str):
         return None
+    if facet == "project":
+        return _describe_project(value)
     projects = {
         str(project)
         for facets in dataset_facets(path[:-1], recipe)

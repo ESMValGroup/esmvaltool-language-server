@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from importlib.metadata import PackageNotFoundError
 from typing import TYPE_CHECKING
 
 import pytest
@@ -15,6 +16,8 @@ from esmvaltool_language_server.vocabulary import (
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
+
+    from pytest_mock import MockerFixture
 
 
 @pytest.fixture(autouse=True)
@@ -188,3 +191,54 @@ def test_facet_documentation(
     else:
         assert description is not None
         assert description.startswith(expected)
+
+
+PROJECT_DOCS = "https://docs.esmvaltool.org/en/v2.13.0/input.html"
+NATIVE_DOCS = (
+    "https://docs.esmvaltool.org/projects/ESMValCore/en/latest/"
+    "quickstart/find_data.html"
+)
+
+
+@pytest.fixture
+def versions(mocker: MockerFixture) -> Iterator[None]:
+    """Pretend that a release of ESMValTool is installed."""
+    installed = {"ESMValTool": "2.13.0", "ESMValCore": "2.14.0.dev1"}
+    mocker.patch.object(vocabulary, "version", side_effect=installed.get)
+    vocabulary._docs_version.cache_clear()
+    yield
+    vocabulary._docs_version.cache_clear()
+
+
+@pytest.mark.usefixtures("versions")
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (
+            "CMIP6",
+            "[Project website](https://wcrp-cmip.org/cmip-phases/cmip6/)",
+        ),
+        ("OBS6", f"[ESMValTool documentation]({PROJECT_DOCS}#observations)"),
+        (
+            "ICON",
+            f"[ESMValCore documentation]({NATIVE_DOCS}#supported-native-models)",
+        ),
+        ("unknown", None),
+    ],
+)
+def test_facet_documentation_project(value: str, expected: str | None) -> None:
+    path = ("datasets", 1, "project")
+    description = vocabulary.facet_documentation(path, value, RECIPE)
+    if expected is None:
+        assert description is None
+    else:
+        assert description == f"`{value}`: {expected}"
+
+
+def test_docs_version_not_installed(mocker: MockerFixture) -> None:
+    mocker.patch.object(
+        vocabulary, "version", side_effect=PackageNotFoundError
+    )
+    vocabulary._docs_version.cache_clear()
+    assert vocabulary._docs_version("ESMValTool") == "latest"
+    vocabulary._docs_version.cache_clear()

@@ -44,6 +44,10 @@ authors and references it defines.
   in the controlled vocabulary of the project, for example CMIP6 or CMIP7,
   that is included in the CMOR tables that ESMValCore uses.
   CMIP7 models are linked to their Essential Model Documentation.
+  Hovering over the value of the `project` facet, such as `CMIP6`, links
+  to the website of the project, or for projects without a website, such as
+  `OBS6`, `native6`, or `ICON`, to the ESMValTool or ESMValCore
+  documentation.
   If ESMValTool is installed, hovering over an author shows their name and
   institute, with links to their ORCID and GitHub profile, hovering over a
   project, theme, or realm shows its definition in `config-references.yml`,
