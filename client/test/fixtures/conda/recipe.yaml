@@ -1,0 +1,7 @@
+context:
+  version: "1.0"
+package:
+  name: example
+  version: ${{ version }}
+about:
+  license: Apache-2.0

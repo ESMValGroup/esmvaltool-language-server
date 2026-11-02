@@ -51,6 +51,12 @@ authors and references it defines.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
   or of a diagnostic script.
 
+Other tools also use files named like recipes, for example `recipe.yaml` of
+conda-forge.
+The server ignores files that are not ESMValTool recipes: files with
+top-level keys, none of which is `documentation`, `datasets`,
+`preprocessors`, or `diagnostics`.
+
 Planned: running a recipe from the editor.
 
 ## Installation
