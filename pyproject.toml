@@ -26,8 +26,11 @@ dynamic = [
 dependencies = [
     # TODO: require esmvalcore>=2.16.0 once it has been released.
     "esmvalcore>=2.16.0.dev0",
+    "globus-sdk",
+    "intake-esgf",
     "pygls>=2.0",
     "pyyaml",
+    "requests",
 ]
 description = "Language server for ESMValTool recipes"
 license = "Apache-2.0"
@@ -146,6 +149,7 @@ scipy = ">=1.6"
 shapely = ">=2.0.0"
 xarray = "*"
 zarr = ">3"
+globus-sdk = "*"
 pygls = ">=2.0"
 
 [tool.pixi.pypi-dependencies]

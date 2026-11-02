@@ -35,7 +35,7 @@ def test_step_description() -> None:
     nodes = schema.at(("preprocessors", "pp", "regrid"), MISSING)
     description = schema.description(nodes)
     assert description is not None
-    assert "[recipe documentation]" in description
+    assert "](https://docs.esmvaltool.org/" in description
 
 
 def test_data_at() -> None:
