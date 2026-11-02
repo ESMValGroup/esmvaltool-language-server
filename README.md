@@ -50,6 +50,9 @@ authors and references it defines.
   `M-x eglot-reconnect`.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
   or of a diagnostic script.
+  If ESMValTool is installed, go to the definition of an author, project,
+  theme, or realm in `config-references.yml`, or open the bibtex file of a
+  reference.
 
 Planned: running a recipe from the editor.
 
