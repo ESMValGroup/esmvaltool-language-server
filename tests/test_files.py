@@ -96,3 +96,12 @@ def test_facet_values(
 def test_facet_values_not_searchable() -> None:
     assert files.facet_values("CMIP6", {"short_name": "tas"}, "dataset") == []
     assert files.facet_values("OBS6", {"short_name": "tas"}, "exp") == []
+
+
+@pytest.mark.usefixtures("local_data")
+def test_known_facets_without_searchable_facets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Data sources without searchable facets are deprecated in ESMValCore.
+    monkeypatch.setattr(files, "load_data_sources", lambda *_: [object()])
+    assert files.known_facets("OBS6") == set()

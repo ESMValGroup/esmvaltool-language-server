@@ -32,8 +32,9 @@ authors and references it defines.
   [intake-esgf configuration](https://intake-esgf.readthedocs.io/en/latest/configure.html),
   so the facets in the recipe are sent to these indices, and in the other
   data sources that are configured in ESMValCore, such as local directories.
-  The facets of the other data sources that can be completed are those in
-  the templates of their paths.
+  The facets of the other data sources that can be completed are those that
+  the data source can search for, for example the facets in the templates of
+  the paths of local data.
   Finding the values usually takes less than a second; until then, the values
   that the recipe schema allows are suggested.
   The values are remembered for 10 minutes.
