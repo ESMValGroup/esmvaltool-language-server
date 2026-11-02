@@ -20,11 +20,10 @@ from urllib.parse import urldefrag, urlsplit
 import pytest
 import requests
 import yaml
-from esmvalcore.cmor.table import get_tables
 from esmvalcore.config import CFG
 from lsprotocol import types
 
-from esmvaltool_language_server import references
+from esmvaltool_language_server import references, vocabulary
 from esmvaltool_language_server.hover import hover
 from esmvaltool_language_server.schema import recipe_schema
 
@@ -33,8 +32,10 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.network
 
-# Links in Markdown, and URLs that editors show as links.
-_MARKDOWN_LINK = re.compile(r"\]\((https?://[^)\s]+)\)")
+# Links in Markdown, which may contain balanced parentheses and backslash
+# escapes, and URLs that editors show as links.
+_MARKDOWN_LINK = re.compile(r"\]\((https?://(?:[^()\s]|\([^()\s]*\))+)\)")
+_ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _URL = re.compile(r"(?<![(<])https?://[^\s)>\]`]+")
 _CODE_BLOCK = re.compile(r"```.*?```", re.DOTALL)
 
@@ -51,14 +52,17 @@ _TIMEOUT = 30
 _WORKERS = 8
 _HTTP_ERROR = 400
 _TOO_MANY_REQUESTS = 429
+# Websites that refuse requests from scripts, so links to them are not
+# checked.
+_SKIPPED_HOSTS = {"wcrp-cmip.org"}
 
 
 def _links(text: str) -> set[str]:
     """Find the links in Markdown text, except those in code blocks."""
     text = _CODE_BLOCK.sub("", text)
-    return set(_MARKDOWN_LINK.findall(text)) | {
-        url.rstrip(".,;:") for url in _URL.findall(text)
-    }
+    return {
+        _ESCAPE.sub(r"\1", url) for url in _MARKDOWN_LINK.findall(text)
+    } | {url.rstrip(".,;:") for url in _URL.findall(text)}
 
 
 def _descriptions(schema: object) -> Iterator[str]:
@@ -148,10 +152,16 @@ def _vocabulary_recipe(project: str, vocabulary: dict) -> str:
 def _vocabulary_recipes() -> Iterator[str]:
     """Write a recipe for each controlled vocabulary of a project."""
     for project in CFG["projects"]:
-        for path in getattr(get_tables(CFG, project), "paths", []):
-            for file in path.glob(f"{project}_CV.json"):
-                content = json.loads(file.read_text(encoding="utf-8"))
-                yield _vocabulary_recipe(project, content["CV"])
+        if content := vocabulary.controlled_vocabulary(project):
+            yield _vocabulary_recipe(project, content)
+
+
+def _projects_recipe() -> str:
+    """Write a recipe that uses all projects."""
+    lines = ["datasets:"]
+    for project in CFG["projects"]:
+        lines.extend(["  - dataset: x", f"    project: {project}"])
+    return "\n".join([*lines, ""])
 
 
 @functools.cache
@@ -225,6 +235,9 @@ def _check(url: str, docs: dict[str, str]) -> str | None:
 
 
 def _assert_resolve(links: set[str], docs: dict[str, str]) -> None:
+    links = {
+        url for url in links if urlsplit(url).netloc not in _SKIPPED_HOSTS
+    }
     with ThreadPoolExecutor(_WORKERS) as executor:
         problems = dict(
             zip(
@@ -280,6 +293,6 @@ def test_tag_links(docs: dict[str, str], esmvaltool_dir: Path) -> None:
 
 def test_vocabulary_links(docs: dict[str, str]) -> None:
     links = set()
-    for text in _vocabulary_recipes():
+    for text in [*_vocabulary_recipes(), _projects_recipe()]:
         links |= _hover_links(text)
     _assert_resolve(links, docs)
