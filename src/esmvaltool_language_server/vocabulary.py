@@ -20,20 +20,10 @@ from esmvalcore.cmor.table import get_tables
 from esmvalcore.config import CFG
 
 from esmvaltool_language_server.cmor import dataset_facets, is_name
+from esmvaltool_language_server.esgf import intake_esgf_mapping
 
 if TYPE_CHECKING:
     from esmvaltool_language_server.context import Path
-
-# The entries of the controlled vocabulary that describe each facet.
-_VOCABULARIES = {
-    "activity": "activity_id",
-    "dataset": "source_id",
-    "exp": "experiment_id",
-    "frequency": "frequency",
-    "grid": "grid_label",
-    "institute": "institution_id",
-    "region": "region",
-}
 
 # Separators of the components of a model in its description: new lines
 # (CMIP6) or semicolons that are not in parentheses (CMIP7).
@@ -138,22 +128,34 @@ def _join(items: object) -> str | None:
     return None
 
 
-def _describe_source(project: str, name: str, entry: object) -> str | None:
-    """Describe a model by its components and institutions."""
-    source = _text(entry, "source")
+def _describe_source(
+    project: str,
+    name: str,
+    entry: object,
+    prefix: str = "",
+) -> str | None:
+    """Describe a model by its components and institutions.
+
+    The prefix is ``driving_`` for the driving model of CORDEX-CMIP6.
+    """
+    source = _item(entry, f"{prefix}source")
+    # CORDEX-CMIP6 lists descriptions with and without the year of the model.
+    if isinstance(source, list) and source:
+        source = source[0]
+    source = _text(source)
     if source is None:
         return None
     heading, *components = (
         part.strip() for part in _SEPARATOR.split(source) if part.strip()
     )
     # CMIP7 describes a model as "<name>: <component>; <component>; ...".
-    if heading.startswith(prefix := f"{name}: "):
-        components.insert(0, heading.removeprefix(prefix))
+    if heading.startswith(label := f"{name}: "):
+        components.insert(0, heading.removeprefix(label))
         heading = ""
     parts = [heading] if heading else []
     if components:
         parts.append("\n".join(f"- {component}" for component in components))
-    if institutions := _join(_item(entry, "institution_id")):
+    if institutions := _join(_item(entry, f"{prefix}institution_id")):
         parts.append(f"Institution: {institutions}")
     if project == "CMIP7":
         url = f"{_EMD_URL}/{name.lower()}"
@@ -190,6 +192,16 @@ def _describe_variant(value: str) -> str | None:
     return None
 
 
+def _vocabulary_name(project: str, facet: str) -> str:
+    """Get the name of the entry of the vocabulary that describes a facet.
+
+    This is the name of the facet on ESGF, or the name of the facet itself
+    if it is not used to find data on ESGF, e.g. ``frequency`` in CMIP6.
+    """
+    mapping = intake_esgf_mapping(project)
+    return mapping.facets.get(facet, facet) if mapping else facet
+
+
 def describe(project: str, facet: str, value: str) -> str | None:
     """Describe the value of a facet with the controlled vocabulary.
 
@@ -211,16 +223,17 @@ def describe(project: str, facet: str, value: str) -> str | None:
     vocabulary = controlled_vocabulary(project)
     if facet == "ensemble" and "realization_index" in vocabulary:
         description = _describe_variant(value)
-    elif facet in _VOCABULARIES:
-        entry = _item(vocabulary.get(_VOCABULARIES[facet]), value)
-        if facet == "dataset":
-            description = _describe_source(project, value, entry)
-        elif facet == "exp":
+    else:
+        name = _vocabulary_name(project, facet)
+        entry = _item(vocabulary.get(name), value)
+        if name in {"source_id", "driving_source_id"}:
+            prefix = name.removesuffix("source_id")
+            description = _describe_source(project, value, entry, prefix)
+        elif name == "experiment_id":
             description = _describe_experiment(entry)
         else:
-            description = _text(entry, "description")
-    else:
-        description = None
+            # CORDEX-CMIP6 describes e.g. a domain_id by its domain.
+            description = _text(entry, "description", name.removesuffix("_id"))
     if description is None:
         return None
     # Start lists on a new line.

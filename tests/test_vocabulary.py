@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 from esmvalcore.config import CFG
 
-from esmvaltool_language_server import vocabulary
+from esmvaltool_language_server import esgf, vocabulary
 from esmvaltool_language_server.vocabulary import (
     controlled_vocabulary,
     describe,
@@ -36,6 +36,9 @@ def clear_cache() -> Iterator[None]:
         ("CMIP6", "frequency", "mon", "monthly"),
         ("CMIP7", "region", "glb", "whole of the Earth"),
         ("CMIP7", "grid", "g100", "1.25 x 0.9 degree"),
+        ("CORDEX-CMIP6", "domain", "EUR-12", "Europe"),
+        ("CORDEX-CMIP6", "exp", "historical", "all-forcing simulation"),
+        ("CORDEX-CMIP6", "dataset", "ALARO1-SFX", "ALARO1-SFX regional"),
     ],
 )
 def test_describe(project: str, facet: str, value: str, expected: str) -> None:
@@ -54,6 +57,13 @@ def test_describe_cmip6_model() -> None:
         description
     )
     assert description.endswith("\n\nInstitution: NCAR")
+
+
+def test_describe_cordex_driving_model() -> None:
+    description = describe("CORDEX-CMIP6", "driver", "ACCESS-CM2")
+    assert description is not None
+    assert description.startswith("`ACCESS-CM2`: ACCESS-CM2 (2019):\n\n- ")
+    assert description.endswith("\n\nInstitution: CSIRO-ARCCSS")
 
 
 def test_describe_cmip7_model() -> None:
@@ -80,6 +90,19 @@ def test_describe_experiment(project: str, expected: str) -> None:
     assert description.endswith(
         "\n\nActivity: CMIP\n\nParent experiment: piControl",
     )
+
+
+def test_describe_configured_facet(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The intake-esgf data source in the configuration translates the facet.
+    source = {
+        "type": "esmvalcore.io.intake_esgf.IntakeESGFDataSource",
+        "facets": {"model": "source_id"},
+    }
+    projects = {"CMIP6": {"data": {"esgf": source}}}
+    monkeypatch.setattr(esgf, "CFG", {"projects": projects})
+    description = describe("CMIP6", "model", "CESM2")
+    assert description is not None
+    assert description.startswith("`CESM2`: CESM2 (2018)")
 
 
 def test_describe_ensemble() -> None:
@@ -147,7 +170,7 @@ def test_describe_model_without_components(
         "controlled_vocabulary",
         lambda _: {"source_id": {"X": entry}},
     )
-    assert describe("TEST", "dataset", "X") == expected
+    assert describe("CMIP6", "dataset", "X") == expected
 
 
 def test_describe_experiment_without_description(
@@ -158,7 +181,7 @@ def test_describe_experiment_without_description(
         "controlled_vocabulary",
         lambda _: {"experiment_id": {"x": {"activity_id": ["CMIP"]}}},
     )
-    assert describe("TEST", "exp", "x") is None
+    assert describe("CMIP6", "exp", "x") is None
 
 
 RECIPE = {
