@@ -54,11 +54,9 @@ fallback_version = "0.1.0.dev0"
 [tool.pytest.ini_options]
 addopts = [
     "--import-mode=importlib",
-    "-m not network",
 ]
 markers = [
-    "network: tests that need internet access, run with `pixi run test-links`",
-    "online: tests that download from the internet, deselect with '-m \"not online\"'",
+    "network: tests that need internet access, deselect with '-m \"not network\"'",
 ]
 testpaths = ["tests"]
 
@@ -195,5 +193,4 @@ py312 = { features = ["py312", "esmvalcore-dev", "dev"], solve-group = "py312" }
 
 [tool.pixi.tasks]
 test = { cmd = "pytest --cov --cov-report=term-missing --cov-report=xml", description = "Run the tests and measure their coverage" }
-test-links = { cmd = "pytest -m network tests/test_links.py", description = "Check that the links in the hover text resolve" }
 test-vscode = { cmd = "npm test", cwd = "client", description = "Run the tests of the VSCode extension in VSCode" }

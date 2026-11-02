@@ -35,11 +35,11 @@ def documentation(
 ) -> Iterator[dict[str, object]]:
     """Mock the Essential Model Documentation, without any models.
 
-    Tests marked as online download the real documentation.
+    Tests marked as network download the real documentation.
     """
     models: dict[str, object] = {}
     vocabulary._emd_description.cache_clear()
-    if request.node.get_closest_marker("online"):
+    if request.node.get_closest_marker("network"):
         yield models
         vocabulary._emd_description.cache_clear()
         return
@@ -116,7 +116,7 @@ def test_describe_documented_cmip7_model(
     )
 
 
-@pytest.mark.online
+@pytest.mark.network
 def test_describe_cmip7_model_online() -> None:
     # Notice when the Essential Model Documentation changes.
     description = describe("CMIP7", "dataset", "ACCESS-ESM1-6")

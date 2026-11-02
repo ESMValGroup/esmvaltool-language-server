@@ -1,7 +1,7 @@
 """Check that the links in the hover text resolve.
 
-These tests need internet access, so they only run with ``-m network``, e.g.
-with ``pixi run test-links``. Links to the documentation of ESMValCore and
+These tests need internet access, deselect them with ``-m "not network"``.
+Links to the documentation of ESMValCore and
 ESMValTool are checked against the documentation given by the
 ``--esmvalcore-docs`` and ``--esmvaltool-docs`` options, so links to parts
 that are not released yet can be checked.
