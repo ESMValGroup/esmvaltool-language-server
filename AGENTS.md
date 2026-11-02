@@ -109,8 +109,8 @@ the types, lint, and format the extension.
 - Changes to the extension, or to what the server sends to the editor, should
   be tested in `client/test/extension.test.ts`.
 - Links in the text that the server shows, such as hovers, are checked by
-  `tests/test_links.py`. When adding links from a new source, make sure that
-  test finds them.
+  `tests/test_links.py`.
+  When adding links from a new source, make sure that test finds them.
 - Tests use pytest; prefer plain functions, fixtures, and
   `pytest.mark.parametrize` over `unittest` style.
 - Do not change existing tests to make new code pass: having to change them
