@@ -143,14 +143,17 @@ class _FacetSearch:
         return self.future
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("found", [True, False])
-async def test_completion_waits_for_facet_search(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    found: bool,
-) -> None:
-    monkeypatch.setattr(server, "FACET_SEARCH_SECONDS", 0.1)
+class _NoFacetSearch:
+    """Do not search the values of any facet."""
+
+    def submit(self, *_: object) -> None:
+        return None
+
+
+def _exp_completion_server(
+    search: _FacetSearch | _NoFacetSearch,
+) -> server.RecipeLanguageServer:
+    """Create a server with a recipe that needs the values of `exp`."""
     ls = server.RecipeLanguageServer()
     ls.protocol._workspace = Workspace(None)
     ls.protocol.client_capabilities = types.ClientCapabilities()
@@ -170,21 +173,43 @@ async def test_completion_waits_for_facet_search(
         ),
     )
     ls.recipes[uri] = yaml.safe_load(text)
-    search = _FacetSearch()
     ls.facet_search = search  # type: ignore[assignment]
+    return ls
+
+
+def _exp_completion_params() -> types.CompletionParams:
+    return types.CompletionParams(
+        text_document=types.TextDocumentIdentifier(
+            uri="file:///recipe_test.yml",
+        ),
+        position=types.Position(line=3, character=44),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("found", [True, False])
+async def test_completion_waits_for_facet_search(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    found: bool,
+) -> None:
+    monkeypatch.setattr(server, "FACET_SEARCH_SECONDS", 0.1)
+    search = _FacetSearch()
+    ls = _exp_completion_server(search)
     if found:
         asyncio.get_running_loop().call_later(
             0.01,
             search.future.set_result,
             ["historical"],
         )
-    result = await server.completion(
-        ls,
-        types.CompletionParams(
-            text_document=types.TextDocumentIdentifier(uri=uri),
-            position=types.Position(line=3, character=44),
-        ),
-    )
+    result = await server.completion(ls, _exp_completion_params())
     labels = [item.label for item in result.items]
     assert result.is_incomplete is not found
     assert (labels == ["historical"]) is found
+
+
+@pytest.mark.asyncio
+async def test_completion_without_facet_search() -> None:
+    ls = _exp_completion_server(_NoFacetSearch())
+    result = await server.completion(ls, _exp_completion_params())
+    assert not result.is_incomplete

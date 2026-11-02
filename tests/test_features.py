@@ -196,6 +196,7 @@ def test_complete_facet_values_not_found(split_cursor: SplitCursor) -> None:
     ("facet", "values", "labels"),
     [
         ("tier", ["2", "3"], ["2", "3"]),
+        ("tier", ["2", "true"], ["2", "'true'"]),
         ("version", ["1", "v2"], ["'1'", "v2"]),
     ],
 )

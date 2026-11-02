@@ -80,6 +80,25 @@ def test_intake_esgf_mapping() -> None:
     assert mapping.value("dataset", "CanESM2") == "CanESM2"
 
 
+def test_configured_intake_esgf_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data = {
+        "local": {"type": "esmvalcore.local.LocalDataSource"},
+        "esgf": {
+            "type": "esmvalcore.io.intake_esgf.IntakeESGFDataSource",
+            "facets": {"dataset": "source_id"},
+        },
+    }
+    projects = {"CMIP6": {"data": data}}
+    monkeypatch.setattr(esgf, "CFG", {"projects": projects})
+    mapping = esgf._intake_esgf_mapping("CMIP6")
+    assert mapping is not None
+    assert mapping.query({"dataset": "CESM2"}, "exp") == {
+        "source_id": ["CESM2"],
+    }
+
+
 @pytest.mark.parametrize(
     "mapping",
     [esgf._intake_esgf_mapping("CMIP6"), esgf._solr_mapping("CMIP6")],
