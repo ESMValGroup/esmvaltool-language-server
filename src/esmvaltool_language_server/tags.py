@@ -111,7 +111,7 @@ def _orcid_link(orcid: str) -> str:
 
 
 def author_summary(author: dict[str, object]) -> str:
-    """Describe an author with links to their ORCID and GitHub profile.
+    """Describe an author with links to their GitHub profile and ORCID.
 
     Parameters
     ----------
@@ -136,11 +136,11 @@ def author_summary(author: dict[str, object]) -> str:
             part for part in (heading, _escape(institute)) if part
         )
     links = []
-    if orcid := fields.get("orcid"):
-        links.append(_orcid_link(orcid))
     if github := fields.get("github"):
         handle = github.lstrip("@")
         links.append(f"[@{_escape(handle)}](https://github.com/{handle})")
     if email := fields.get("email"):
         links.append(f"[{_escape(email)}](mailto:{email})")
+    if orcid := fields.get("orcid"):
+        links.append(_orcid_link(orcid))
     return "\n\n".join(part for part in (heading, " · ".join(links)) if part)

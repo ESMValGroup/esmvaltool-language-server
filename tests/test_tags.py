@@ -79,9 +79,9 @@ def test_author_summary() -> None:
     )
     assert summary == (
         "**Jane Doe**, Example Institute\n\n"
-        "[ORCID 0000-0001-2345-6789](https://orcid.org/0000-0001-2345-6789)"
-        " · [@janedoe](https://github.com/janedoe)"
+        "[@janedoe](https://github.com/janedoe)"
         " · [jane@example.org](mailto:jane@example.org)"
+        " · [ORCID 0000-0001-2345-6789](https://orcid.org/0000-0001-2345-6789)"
     )
 
 
