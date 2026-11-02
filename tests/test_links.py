@@ -234,6 +234,12 @@ def _check(url: str, docs: dict[str, str]) -> str | None:
     return None
 
 
+def _assert_found(links: set[str], hosts: set[str]) -> None:
+    """Check that links to each host were found, so the test checks them."""
+    missing = hosts - {urlsplit(url).netloc for url in links}
+    assert not missing, f"No links found to {', '.join(sorted(missing))}"
+
+
 def _assert_resolve(links: set[str], docs: dict[str, str]) -> None:
     links = {
         url for url in links if urlsplit(url).netloc not in _SKIPPED_HOSTS
@@ -278,7 +284,7 @@ def test_schema_links(docs: dict[str, str]) -> None:
         for text in _descriptions(recipe_schema().schema)
         for link in _links(text)
     }
-    assert links
+    _assert_found(links, {"docs.esmvaltool.org"})
     _assert_resolve(links, docs)
 
 
@@ -288,6 +294,7 @@ def test_tag_links(docs: dict[str, str], esmvaltool_dir: Path) -> None:
         links = _hover_links(_tags_recipe(esmvaltool_dir))
     finally:
         references.tags.cache_clear()
+    _assert_found(links, {"doi.org", "github.com", "orcid.org"})
     _assert_resolve(links, docs)
 
 
@@ -295,4 +302,8 @@ def test_vocabulary_links(docs: dict[str, str]) -> None:
     links = set()
     for text in [*_vocabulary_recipes(), _projects_recipe()]:
         links |= _hover_links(text)
+    _assert_found(
+        links,
+        {"docs.esmvaltool.org", "wcrp-cmip.github.io", "wcrp-cmip.org"},
+    )
     _assert_resolve(links, docs)
