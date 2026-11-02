@@ -44,7 +44,8 @@ authors and references it defines.
   a reference shows its bibtex entry.
   The server reads `config-references.yml` and the list of bibtex files only
   once, so restart it after changing that file or adding a bibtex file.
-  In Visual Studio Code, press Ctrl+Shift+P (Cmd+Shift+P on macOS) and run
+  In Visual Studio Code, press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>
+  (<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> on macOS) and run
   **ESMValTool: Restart Language Server**; in Emacs, run
   `M-x eglot-reconnect`.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
@@ -62,9 +63,11 @@ pip install esmvaltool-language-server
 ```
 
 Then set up your editor as described below.
-Other editors can start the server with the command
-`esmvaltool-language-server --stdio`, which communicates over stdin and
-stdout.
+Other editors that support the language server protocol, such as
+[Neovim](https://neovim.io/doc/user/lsp.html) and Sublime Text with the
+[LSP package](https://lsp.sublimetext.io), can start the server with the
+command `esmvaltool-language-server --stdio`, which communicates over stdin
+and stdout.
 
 ### Visual Studio Code
 
@@ -76,6 +79,12 @@ In a workspace with multiple folders, put this setting in the workspace
 settings: Visual Studio Code ignores it in the settings of a folder.
 The extension checks files whose name starts with `recipe` and ends with
 `.yml` or `.yaml`.
+
+Suggestions are shown while you type.
+To show them at any other point, for example on an empty line or after the
+colon of a key, press <kbd>Ctrl</kbd>+<kbd>Space</kbd>.
+Press <kbd>Ctrl</kbd>+<kbd>Space</kbd> again while the suggestions are
+shown to show or hide the documentation of the selected suggestion.
 
 If the language server cannot run, for example because it is not installed
 in the selected environment, the extension falls back to checking recipes
@@ -119,8 +128,8 @@ If the environment where the server is installed is not active when Emacs
 starts, replace `"esmvaltool-language-server"` by the full path to the
 command, for example `"/path/to/env/bin/esmvaltool-language-server"`.
 Problems are shown with Flymake, completion works with
-`completion-at-point`, documentation is shown by ElDoc, and `M-.` goes to a
-definition.
+`completion-at-point` (`C-M-i`), documentation is shown by ElDoc, and `M-.`
+goes to a definition.
 
 ## Development
 
@@ -153,7 +162,7 @@ npm run package                    # build a package that can be installed
 checks that the problems, completion, hover, and go to definition work.
 Set `VSCODE_VERSION` to test a version other than the latest one.
 To try the extension yourself, open the `client` directory in Visual Studio Code and
-press F5.
+press <kbd>F5</kbd>.
 In the window that opens, set `esmvaltool.languageServer.pythonPath` to the
 Python interpreter of the pixi environment, which is shown by
 `pixi run which python`.
