@@ -54,6 +54,10 @@ authors and references it defines.
   is resolved or will not be fixed.
   The message is the title of the erratum, and its code links to the
   description.
+  If an erratum applies to only some of the variables of a dataset, the
+  message names them.
+  A resolved erratum is only shown for a dataset with a `version` that is
+  affected, because the latest version is usually no longer affected.
   To find them, the project and name of each dataset in the recipe are sent to
   the service; other facets, such as the version, are compared locally with
   the affected datasets.

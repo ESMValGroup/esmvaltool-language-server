@@ -183,7 +183,7 @@ def test_affects_without_version() -> None:
 def test_diagnostics_for_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
     text, recipe = _recipe(
         "project: CMIP6, dataset: CESM2, exp: historical, "
-        "ensemble: r1i1p1f1, grid: gn",
+        "ensemble: r1i1p1f1, grid: gn, version: v20190308",
     )
     session = _Session(
         [
@@ -246,3 +246,59 @@ def test_no_diagnostics_for_invalid_yaml(
 ) -> None:
     service = _service(monkeypatch, _Session([_issue()]))
     assert errata.errata_diagnostics("a: [", {}, service) == []
+
+
+def test_resolved_errata_need_a_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text, recipe = _recipe("project: CMIP6, dataset: CESM2")
+    session = _Session(
+        [
+            _issue("resolved", "resolved"),
+            _issue("wontfix", "wontfix"),
+            _issue("new", "new"),
+        ],
+    )
+    service = _service(monkeypatch, session)
+    found = errata.errata_diagnostics(text, recipe, service)
+    assert [d.message for d in found] == ["Problem wontfix", "Problem new"]
+
+
+def test_resolved_erratum_needs_the_version_to_be_affected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text, recipe = _recipe("project: CMIP6, dataset: CESM2, version: v1")
+    service = _service(monkeypatch, _Session([_issue("r", "resolved")]))
+    assert errata.errata_diagnostics(text, recipe, service) == []
+
+
+def test_errata_per_variable_group(monkeypatch: pytest.MonkeyPatch) -> None:
+    text = (
+        "datasets:\n"
+        "  - {project: CMIP6, dataset: CESM2, exp: historical}\n"
+        "diagnostics:\n"
+        "  diag:\n"
+        "    variables:\n"
+        "      tas: {mip: Amon}\n"
+        "      pr: {mip: Amon}\n"
+        "      ta: {mip: Amon}\n"
+        "    additional_datasets:\n"
+        "      - {project: CMIP6, dataset: CESM2, exp: historical}\n"
+    )
+    session = _Session(
+        [
+            _issue("some", datasets=(CESM2, CESM2.replace("tas", "ta"))),
+            _issue("all", "wontfix"),
+        ],
+    )
+    session.issues["all"]["datasets"] = [
+        CESM2.replace(".tas.", f".{name}.") for name in ("tas", "pr", "ta")
+    ]
+    service = _service(monkeypatch, session)
+    found = errata.errata_diagnostics(text, yaml.safe_load(text), service)
+    assert [(d.range.start.line, d.message) for d in found] == [
+        (1, "Problem some (affects tas, ta)"),
+        (1, "Problem all"),
+        (9, "Problem some (affects tas, ta)"),
+        (9, "Problem all"),
+    ]
