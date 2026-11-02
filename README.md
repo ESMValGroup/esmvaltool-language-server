@@ -44,9 +44,12 @@ authors and references it defines.
   in the controlled vocabulary of the project, for example CMIP6 or CMIP7,
   that is included in the CMOR tables that ESMValCore uses.
   CMIP7 models are linked to their Essential Model Documentation.
-  If ESMValTool is installed, hovering over an author, project, theme, or
-  realm shows its definition in `config-references.yml`, and hovering over
-  a reference shows its bibtex entry.
+  If ESMValTool is installed, hovering over an author shows their name and
+  institute, with links to their ORCID and GitHub profile, hovering over a
+  project, theme, or realm shows its definition in `config-references.yml`,
+  and hovering over a reference shows its first author, year, and title,
+  with a link to its DOI.
+  If the bibtex file of a reference cannot be read, its content is shown.
   The server reads `config-references.yml` and the list of bibtex files only
   once, so restart it after changing that file or adding a bibtex file.
   In Visual Studio Code, press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>
@@ -55,6 +58,9 @@ authors and references it defines.
   `M-x eglot-reconnect`.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
   or of a diagnostic script.
+  If ESMValTool is installed, go to the definition of an author, project,
+  theme, or realm in `config-references.yml`, or open the bibtex file of a
+  reference.
 
 Planned: running a recipe from the editor.
 

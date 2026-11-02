@@ -12647,6 +12647,7 @@ packages:
   - esmvalcore>=2.16.0.dev0
   - globus-sdk
   - intake-esgf
+  - pybtex
   - pygls>=2.0
   - pyyaml
   - requests

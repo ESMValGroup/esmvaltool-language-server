@@ -355,18 +355,25 @@ def esmvaltool(
                 name: Doe, Jane
                 institute: Example Institute
                 orcid:
+                github: janedoe
             themes:
               phys: physics
             """),
     )
     (tmp_path / "references").mkdir()
     (tmp_path / "references" / "doe21.bibtex").write_text(
-        "@article{doe21,\n  title = {Example}\n}\n",
+        "@article{doe21,\n  author = {Doe, Jane},\n  title = {Example},\n"
+        "  year = 2021,\n  doi = {10.1000/xyz}\n}\n",
+    )
+    (tmp_path / "references" / "roe22.bibtex").write_text(
+        "@article{roe22,\n  title = {Example\n",
     )
     monkeypatch.setattr(references, "esmvaltool_directory", lambda: tmp_path)
     references.tags.cache_clear()
+    references._tag_lines.cache_clear()
     yield
     references.tags.cache_clear()
+    references._tag_lines.cache_clear()
 
 
 TAGS_RECIPE = dedent("""\
@@ -376,6 +383,7 @@ TAGS_RECIPE = dedent("""\
       maintainer: [doe_jane, unknown]
       references:
         - doe21
+        - roe22
     diagnostics:
       diag:
         themes:
@@ -396,9 +404,8 @@ def _hover_tag(split_cursor: SplitCursor, old: str, new: str) -> str | None:
 def test_hover_author(split_cursor: SplitCursor) -> None:
     value = _hover_tag(split_cursor, "- doe_jane", "- doe|_jane")
     assert value == (
-        "Author `doe_jane`:\n\n"
-        "- name: Doe, Jane\n"
-        "- institute: Example Institute"
+        "Author `doe_jane`: **Jane Doe**, Example Institute\n\n"
+        "[@janedoe](https://github.com/janedoe)"
     )
 
 
@@ -420,8 +427,16 @@ def test_hover_unknown_author(split_cursor: SplitCursor) -> None:
 def test_hover_reference(split_cursor: SplitCursor) -> None:
     value = _hover_tag(split_cursor, "doe21", "doe|21")
     assert value == (
-        "Reference `doe21`:\n\n"
-        "```bibtex\n@article{doe21,\n  title = {Example}\n}\n```"
+        "Reference `doe21`: [Doe (2021): Example](https://doi.org/10.1000/xyz)"
+    )
+
+
+@pytest.mark.usefixtures("esmvaltool")
+def test_hover_unreadable_reference(split_cursor: SplitCursor) -> None:
+    value = _hover_tag(split_cursor, "roe22", "roe|22")
+    assert value == (
+        "Reference `roe22`:\n\n"
+        "```bibtex\n@article{roe22,\n  title = {Example\n```"
     )
 
 
@@ -525,6 +540,40 @@ def test_definition_script(split_cursor: SplitCursor, tmp_path: Path) -> None:
     )
     assert location is not None
     assert location.uri == script.as_uri()
+
+
+@pytest.mark.usefixtures("esmvaltool")
+@pytest.mark.parametrize(
+    ("edit", "file", "line"),
+    [
+        (("- doe_jane", "- doe|_jane"), "config-references.yml", 1),
+        (("[doe_jane", "[doe|_jane"), "config-references.yml", 1),
+        (("- phys", "- ph|ys"), "config-references.yml", 6),
+        (("doe21", "doe|21"), "references/doe21.bibtex", 0),
+    ],
+)
+def test_definition_tag(
+    split_cursor: SplitCursor,
+    tmp_path: Path,
+    edit: tuple[str, str],
+    file: str,
+    line: int,
+) -> None:
+    location = _definition(split_cursor, TAGS_RECIPE.replace(*edit))
+    assert location is not None
+    assert location.uri == (tmp_path / file).as_uri()
+    assert location.range.start == types.Position(line=line, character=0)
+
+
+@pytest.mark.usefixtures("esmvaltool")
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [("unknown]", "unk|nown]"), ("doe21", "doe|21x")],
+)
+def test_definition_unknown_tag(
+    split_cursor: SplitCursor, old: str, new: str
+) -> None:
+    assert _definition(split_cursor, TAGS_RECIPE.replace(old, new)) is None
 
 
 def test_definition_invalid_yaml(split_cursor: SplitCursor) -> None:

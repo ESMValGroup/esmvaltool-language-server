@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from lsprotocol import types
 
-from esmvaltool_language_server import cmor, references, vocabulary
+from esmvaltool_language_server import cmor, references, tags, vocabulary
 from esmvaltool_language_server.completion import preprocessor_documentation
 from esmvaltool_language_server.context import context_at
 from esmvaltool_language_server.schema import MISSING, RecipeSchema, data_at
@@ -117,9 +117,17 @@ def _tag_documentation(path: Path, name: str) -> str | None:
     if value is None:
         return None
     title = f"{_TAG_KINDS[section]} `{name}`"
-    if section == "references":
-        return f"{title}:\n\n```bibtex\n{value}\n```"
+    if section == "references" and isinstance(value, str):
+        return _reference_documentation(title, name, value)
     if isinstance(value, dict):
-        lines = [f"- {key}: {item}" for key, item in value.items() if item]
-        return "\n".join([f"{title}:", "", *lines])
+        # Only authors are defined by a mapping.
+        return f"{title}: {tags.author_summary(value)}"
     return f"{title}: {value}"
+
+
+def _reference_documentation(title: str, name: str, bibtex: str) -> str:
+    """Summarize a reference, or show its bibtex if it cannot be read."""
+    summary = tags.reference_summary(name, bibtex)
+    if summary is None:
+        return f"{title}:\n\n```bibtex\n{bibtex}\n```"
+    return f"{title}: {summary}"
