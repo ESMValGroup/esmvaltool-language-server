@@ -365,8 +365,10 @@ def esmvaltool(
     )
     monkeypatch.setattr(references, "esmvaltool_directory", lambda: tmp_path)
     references.tags.cache_clear()
+    references._tag_lines.cache_clear()
     yield
     references.tags.cache_clear()
+    references._tag_lines.cache_clear()
 
 
 TAGS_RECIPE = dedent("""\
@@ -488,6 +490,40 @@ def test_definition_script(split_cursor: SplitCursor, tmp_path: Path) -> None:
     )
     assert location is not None
     assert location.uri == script.as_uri()
+
+
+@pytest.mark.usefixtures("esmvaltool")
+@pytest.mark.parametrize(
+    ("edit", "file", "line"),
+    [
+        (("- doe_jane", "- doe|_jane"), "config-references.yml", 1),
+        (("[doe_jane", "[doe|_jane"), "config-references.yml", 1),
+        (("- phys", "- ph|ys"), "config-references.yml", 6),
+        (("doe21", "doe|21"), "references/doe21.bibtex", 0),
+    ],
+)
+def test_definition_tag(
+    split_cursor: SplitCursor,
+    tmp_path: Path,
+    edit: tuple[str, str],
+    file: str,
+    line: int,
+) -> None:
+    location = _definition(split_cursor, TAGS_RECIPE.replace(*edit))
+    assert location is not None
+    assert location.uri == (tmp_path / file).as_uri()
+    assert location.range.start == types.Position(line=line, character=0)
+
+
+@pytest.mark.usefixtures("esmvaltool")
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [("unknown]", "unk|nown]"), ("doe21", "doe|21x")],
+)
+def test_definition_unknown_tag(
+    split_cursor: SplitCursor, old: str, new: str
+) -> None:
+    assert _definition(split_cursor, TAGS_RECIPE.replace(old, new)) is None
 
 
 def test_definition_invalid_yaml(split_cursor: SplitCursor) -> None:
