@@ -39,6 +39,11 @@ authors and references it defines.
   The values are remembered for 10 minutes.
 - Documentation of preprocessor functions and other keys, their values, and
   preprocessors, with default values, when you hover over them.
+  Hovering over the value of a facet, such as `dataset`, `exp`,
+  `activity`, `institute`, `grid`, or `ensemble`, shows its description
+  in the controlled vocabulary of the project, for example CMIP6 or CMIP7,
+  that is included in the CMOR tables that ESMValCore uses.
+  CMIP7 models are linked to their Essential Model Documentation.
   If ESMValTool is installed, hovering over an author, project, theme, or
   realm shows its definition in `config-references.yml`, and hovering over
   a reference shows its bibtex entry.
