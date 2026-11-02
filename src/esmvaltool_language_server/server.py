@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,7 @@ from esmvaltool_language_server import __version__, references
 from esmvaltool_language_server.completion import Options, completions
 from esmvaltool_language_server.definition import definition
 from esmvaltool_language_server.diagnostics import check_recipe
+from esmvaltool_language_server.errata import ErrataService, errata_diagnostics
 from esmvaltool_language_server.hover import hover
 from esmvaltool_language_server.schema import MISSING, recipe_schema
 from esmvaltool_language_server.search import FacetSearch, unused_facets
@@ -49,6 +51,10 @@ class RecipeLanguageServer(LanguageServer):
         # YAML.
         self.recipes: dict[str, object] = {}
         self.facet_search = FacetSearch()
+        self.errata = ErrataService()
+        # Looking up errata sends the datasets in recipes to the ESGF errata
+        # service, so the user can turn it off.
+        self.errata_enabled = True
 
     def schedule_check(self, uri: str, delay: float = 0.0) -> None:
         """Check a recipe after a delay, replacing an earlier check."""
@@ -63,7 +69,6 @@ class RecipeLanguageServer(LanguageServer):
         # Checking a large recipe takes up to a second, so do it in a thread
         # to keep the server responsive.
         loop = asyncio.get_running_loop()
-        lines = document.lines
         try:
             recipe, diagnostics = await loop.run_in_executor(
                 None,
@@ -77,18 +82,64 @@ class RecipeLanguageServer(LanguageServer):
             del self.pending[uri]
         if recipe is not MISSING:
             self.recipes[uri] = recipe
-        for diagnostic in diagnostics:
+        lines = document.lines
+        self._publish(document, lines, version, diagnostics)
+        if recipe is not MISSING and self.errata_enabled:
+            await self._publish_errata(document, lines, recipe, diagnostics)
+
+    def _publish(
+        self,
+        document: TextDocument,
+        lines: list[str],
+        version: int | None,
+        diagnostics: list[types.Diagnostic],
+    ) -> None:
+        # Copy the diagnostics, because they are published more than once.
+        converted = [copy.copy(diagnostic) for diagnostic in diagnostics]
+        for diagnostic in converted:
             diagnostic.range = document.position_codec.range_to_client_units(
                 lines,
                 diagnostic.range,
             )
         self.text_document_publish_diagnostics(
             types.PublishDiagnosticsParams(
-                uri=uri,
+                uri=document.uri,
                 version=version,
-                diagnostics=diagnostics,
+                diagnostics=converted,
             ),
         )
+
+    async def _publish_errata(
+        self,
+        document: TextDocument,
+        lines: list[str],
+        recipe: object,
+        diagnostics: list[types.Diagnostic],
+    ) -> None:
+        """Publish the diagnostics again with the errata of the datasets.
+
+        The errata are looked up after the diagnostics have been published,
+        because the service may be slow. Nothing is published if there are no
+        errata or the recipe has changed or was closed in the meantime.
+        """
+        uri, version = document.uri, document.version
+        loop = asyncio.get_running_loop()
+        try:
+            errata = await loop.run_in_executor(
+                None,
+                errata_diagnostics,
+                document.source,
+                recipe,
+                self.errata,
+            )
+        except Exception:
+            logger.exception("Failed to find errata for %s", uri)
+            return
+        if not errata or uri not in self.workspace.text_documents:
+            return
+        if self.workspace.get_text_document(uri).version != version:
+            return
+        self._publish(document, lines, version, [*diagnostics, *errata])
 
 
 server = RecipeLanguageServer()
@@ -104,6 +155,17 @@ def _position(
         position,
     )
     return types.Position(line=converted.line, character=converted.character)
+
+
+@server.feature(types.INITIALIZE)
+def initialize(
+    ls: RecipeLanguageServer,
+    params: types.InitializeParams,
+) -> None:
+    """Read the settings that the editor sends when it starts the server."""
+    options = params.initialization_options
+    if isinstance(options, dict):
+        ls.errata_enabled = options.get("errata", True) is not False
 
 
 @server.feature(types.INITIALIZED)

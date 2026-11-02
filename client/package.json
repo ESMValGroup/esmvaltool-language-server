@@ -44,6 +44,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "Python interpreter of the environment where ESMValTool and the language server are installed. If empty, the interpreter selected in the [Python extension](https://marketplace.visualstudio.com/items?itemName=ms-python.python) is used."
+        },
+        "esmvaltool.languageServer.errata": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show [errata](https://errata.esgf.io) of the datasets in a recipe. To find them, the project and name of the datasets are sent to the ESGF errata service."
         }
       }
     }

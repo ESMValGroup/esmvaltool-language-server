@@ -48,6 +48,19 @@ authors and references it defines.
   (<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> on macOS) and run
   **ESMValTool: Restart Language Server**; in Emacs, run
   `M-x eglot-reconnect`.
+- Errata of the datasets in a recipe, from the
+  [ESGF errata service](https://errata.esgf.io), shown on the line of the
+  dataset: a warning if the erratum is new or on hold, and information if it
+  is resolved or will not be fixed.
+  The message is the title of the erratum, and its code links to the
+  description.
+  To find them, the project and name of each dataset in the recipe are sent to
+  the service; other facets, such as the version, are compared locally with
+  the affected datasets.
+  The errata are shown a moment after the other problems, are remembered for
+  an hour, and are left out if the service cannot be reached.
+  Turn this off with the setting `esmvaltool.languageServer.errata` in Visual
+  Studio Code, or with the initialization option `errata` in other editors.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
   or of a diagnostic script.
 
@@ -130,6 +143,8 @@ command, for example `"/path/to/env/bin/esmvaltool-language-server"`.
 Problems are shown with Flymake, completion works with
 `completion-at-point` (`C-M-i`), documentation is shown by ElDoc, and `M-.`
 goes to a definition.
+To turn off the errata of datasets, add `:initializationOptions (:errata
+:json-false)` after `"--stdio"` in the command above.
 
 ## Development
 

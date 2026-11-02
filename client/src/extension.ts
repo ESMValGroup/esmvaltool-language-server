@@ -94,6 +94,11 @@ async function start(): Promise<void> {
   };
   const clientOptions: LanguageClientOptions = {
     documentSelector: [RECIPE_SELECTOR],
+    initializationOptions: {
+      errata: vscode.workspace
+        .getConfiguration("esmvaltool.languageServer")
+        .get<boolean>("errata", true),
+    },
   };
   const starting = new LanguageClient(
     "esmvaltool",
