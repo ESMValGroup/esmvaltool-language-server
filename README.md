@@ -163,6 +163,7 @@ copy instead, see the comment in `pyproject.toml`.
 ```bash
 pixi run test                      # run the tests and measure coverage
 pixi run -e py312 test             # run the tests with the oldest Python
+pixi run test -m "not network"     # run the tests without internet access
 pixi run test-vscode               # run the extension and server in VSCode
 pixi run pre-commit install        # check the code before each commit
 pixi run pre-commit run -a         # check all code now
@@ -180,6 +181,16 @@ npm run lint                       # check the code with ESLint
 npm run format                     # format the code with Prettier
 npm run package                    # build a package that can be installed
 ```
+
+The tests marked `network` need internet access.
+They check the Essential Model Documentation of CMIP7 models and the links in
+the recipe schema and in the documentation shown when hovering over tags,
+references, and facets.
+Links to the latest documentation of ESMValCore and ESMValTool are checked
+against the documentation of the development versions that the server is
+developed with; to use other documentation, set `ESMVALCORE_DOCS` or
+`ESMVALTOOL_DOCS` to its URL or to a local build directory, for example
+`ESMVALCORE_DOCS=../esmvalcore/doc/build/html/ pixi run pytest tests/test_links.py`.
 
 `pixi run test-vscode` downloads VSCode, starts it with the extension, and
 checks that the problems, completion, hover, and go to definition work.
