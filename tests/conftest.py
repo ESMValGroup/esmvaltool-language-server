@@ -45,15 +45,6 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "Default: $ESMVALTOOL_DOCS or %(default)s."
         ),
     )
-    group.addoption(
-        "--esmvaltool-dir",
-        default=os.environ.get("ESMVALTOOL_DIR"),
-        help=(
-            "Directory of the esmvaltool package, with config-references.yml "
-            "and the bibtex files, if ESMValTool is not installed. "
-            "Default: $ESMVALTOOL_DIR."
-        ),
-    )
 
 
 @lru_cache

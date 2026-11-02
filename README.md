@@ -191,9 +191,6 @@ against the documentation of the development versions that the server is
 developed with; to use other documentation, set `ESMVALCORE_DOCS` or
 `ESMVALTOOL_DOCS` to its URL or to a local build directory, for example
 `ESMVALCORE_DOCS=../esmvalcore/doc/build/html/ pixi run pytest tests/test_links.py`.
-The links of tags and references are only checked if ESMValTool is
-installed, or if `ESMVALTOOL_DIR` is set to the `esmvaltool` directory of
-a copy of its repository.
 
 `pixi run test-vscode` downloads VSCode, starts it with the extension, and
 checks that the problems, completion, hover, and go to definition work.

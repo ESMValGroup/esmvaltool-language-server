@@ -48,6 +48,40 @@ _DOCS = {
     "esmvaltool_docs": re.compile(r"https://docs\.esmvaltool\.org/en/latest/"),
 }
 
+# Examples of the tags and references of ESMValTool, with each kind of link
+# that the hover text can contain.
+_CONFIG_REFERENCES = """\
+authors:
+  andela_bouwe:
+    name: Andela, Bouwe
+    institute: NLeSC, Netherlands
+    orcid: https://orcid.org/0000-0001-9005-8940
+    github: bouweandela
+  docquier_david:
+    name: Docquier, David
+    institute: UC Louvain, Belgium
+    orcid: 0000-0002-5720-4253
+"""
+_BIBTEX = {
+    "righi20gmd": """\
+@article{righi20gmd,
+  doi = {10.5194/gmd-13-1179-2020},
+  year = 2020,
+  author = {Righi, M. and Andela, B. and Eyring, V. and others},
+  title = {Earth System Model Evaluation Tool (ESMValTool) v2.0},
+  journal = {Geoscientific Model Development},
+}
+""",
+    "gpcp-sg": """\
+@misc{gpcp-sg,
+  url = {https://psl.noaa.gov/data/gridded/data.gpcp.html},
+  year = 2003,
+  author = {Adler, R.F. and others},
+  title = {The Version 2 Global Precipitation Climatology Project (GPCP)},
+}
+""",
+}
+
 _TIMEOUT = 30
 _WORKERS = 8
 _HTTP_ERROR = 400
@@ -106,7 +140,7 @@ def _items(section: str, names: Iterable[str], indent: int) -> str:
 
 
 def _tags_recipe(directory: Path) -> str:
-    """Write a recipe that uses all tags and references of ESMValTool."""
+    """Write a recipe that uses all tags and references in a directory."""
     tags = yaml.safe_load(
         (directory / "config-references.yml").read_text(encoding="utf-8"),
     )
@@ -260,16 +294,30 @@ def _assert_resolve(links: set[str], docs: dict[str, str]) -> None:
 
 @pytest.fixture
 def esmvaltool_dir(
-    request: pytest.FixtureRequest,
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-) -> Path:
-    """Use the ESMValTool given by the option, or the one that is installed."""
-    option = request.config.getoption("esmvaltool_dir")
-    directory = Path(option) if option else references.esmvaltool_directory()
-    if directory is None:
-        pytest.skip("ESMValTool is not installed, use --esmvaltool-dir")
-    monkeypatch.setattr(references, "esmvaltool_directory", lambda: directory)
-    return directory
+) -> Iterator[Path]:
+    """Use examples of the tags and references of ESMValTool.
+
+    The links in ESMValTool itself are not checked here, so the test does
+    not fail when one of them breaks.
+    """
+    (tmp_path / "config-references.yml").write_text(
+        _CONFIG_REFERENCES,
+        encoding="utf-8",
+    )
+    (tmp_path / "references").mkdir()
+    for name, bibtex in _BIBTEX.items():
+        (tmp_path / "references" / f"{name}.bibtex").write_text(
+            bibtex,
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(references, "esmvaltool_directory", lambda: tmp_path)
+    references.tags.cache_clear()
+    references._tag_lines.cache_clear()
+    yield tmp_path
+    references.tags.cache_clear()
+    references._tag_lines.cache_clear()
 
 
 @pytest.fixture
@@ -289,11 +337,7 @@ def test_schema_links(docs: dict[str, str]) -> None:
 
 
 def test_tag_links(docs: dict[str, str], esmvaltool_dir: Path) -> None:
-    references.tags.cache_clear()
-    try:
-        links = _hover_links(_tags_recipe(esmvaltool_dir))
-    finally:
-        references.tags.cache_clear()
+    links = _hover_links(_tags_recipe(esmvaltool_dir))
     _assert_found(links, {"doi.org", "github.com", "orcid.org"})
     _assert_resolve(links, docs)
 
