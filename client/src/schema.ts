@@ -155,7 +155,38 @@ export class SchemaFallback implements vscode.Disposable {
   }
 }
 
-function isRecipe(resource: string): boolean {
-  const path = vscode.Uri.parse(resource).path;
-  return /\/recipe[^/]*\.ya?ml$/.test(path);
+// The top-level keys of recipes, as in the recipe schema, and a key at the
+// start of a line, as found by the language server.
+const RECIPE_KEYS = new Set([
+  "documentation",
+  "datasets",
+  "preprocessors",
+  "diagnostics",
+]);
+const TOP_LEVEL_KEY = /^(["']?)([^\s#:"'{}[\]-][^:#]*?)\1\s*:(\s|$)/;
+
+/**
+ * Check if a file is a recipe.
+ *
+ * Other tools also use files named like recipes, such as `recipe.yaml` of
+ * conda-forge, so open files are only recipes if they have a top-level key
+ * of recipes or no top-level keys yet.
+ */
+export function isRecipe(resource: string): boolean {
+  const uri = vscode.Uri.parse(resource);
+  if (!/\/recipe[^/]*\.ya?ml$/.test(uri.path)) {
+    return false;
+  }
+  const document = vscode.workspace.textDocuments.find(
+    (candidate) => candidate.uri.toString() === uri.toString(),
+  );
+  if (!document) {
+    return true;
+  }
+  const keys = document
+    .getText()
+    .split(/\r?\n/)
+    .map((line) => TOP_LEVEL_KEY.exec(line)?.[2])
+    .filter((key) => key !== undefined);
+  return keys.length === 0 || keys.some((key) => RECIPE_KEYS.has(key));
 }

@@ -213,3 +213,41 @@ async def test_completion_without_facet_search() -> None:
     ls = _exp_completion_server(_NoFacetSearch())
     result = await server.completion(ls, _exp_completion_params())
     assert not result.is_incomplete
+
+
+def test_check_document_ignores_other_files() -> None:
+    _, diagnostics = server._check_document("package:\n  name: example\n")
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_other_files_have_no_features() -> None:
+    ls = server.RecipeLanguageServer()
+    ls.protocol._workspace = Workspace(None)
+    ls.protocol.client_capabilities = types.ClientCapabilities()
+    uri = "file:///recipe.yaml"
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri=uri,
+            language_id="yaml",
+            version=1,
+            text="package:\n  name: example\nabout:\n  \n",
+        ),
+    )
+    document = types.TextDocumentIdentifier(uri=uri)
+    position = types.Position(line=3, character=2)
+    result = await server.completion(
+        ls,
+        types.CompletionParams(text_document=document, position=position),
+    )
+    assert result.items == []
+    hover = server.hover_(
+        ls,
+        types.HoverParams(text_document=document, position=position),
+    )
+    assert hover is None
+    location = server.definition_(
+        ls,
+        types.DefinitionParams(text_document=document, position=position),
+    )
+    assert location is None
