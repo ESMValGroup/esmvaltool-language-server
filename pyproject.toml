@@ -56,6 +56,9 @@ addopts = [
     "--import-mode=importlib",
 ]
 testpaths = ["tests"]
+markers = [
+    "online: tests that download from the internet, deselect with '-m \"not online\"'",
+]
 
 [tool.coverage.run]
 branch = true

@@ -5,6 +5,7 @@ from importlib.metadata import PackageNotFoundError
 from typing import TYPE_CHECKING
 
 import pytest
+import requests
 from esmvalcore.config import CFG
 
 from esmvaltool_language_server import esgf, vocabulary
@@ -25,6 +26,34 @@ def clear_cache() -> Iterator[None]:
     controlled_vocabulary.cache_clear()
     yield
     controlled_vocabulary.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def documentation(
+    request: pytest.FixtureRequest,
+    mocker: MockerFixture,
+) -> Iterator[dict[str, object]]:
+    """Mock the Essential Model Documentation, without any models.
+
+    Tests marked as online download the real documentation.
+    """
+    models: dict[str, object] = {}
+    vocabulary._emd_description.cache_clear()
+    if request.node.get_closest_marker("online"):
+        yield models
+        vocabulary._emd_description.cache_clear()
+        return
+
+    def get(url: str, **_: object) -> requests.Response:
+        model = url.rsplit("/", 1)[-1].removesuffix(".json")
+        response = mocker.Mock(spec=requests.Response)
+        response.status_code = 200 if model in models else 404
+        response.json.return_value = models.get(model)
+        return response
+
+    mocker.patch.object(vocabulary.requests, "get", side_effect=get)
+    yield models
+    vocabulary._emd_description.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -67,13 +96,48 @@ def test_describe_cordex_driving_model() -> None:
 
 
 def test_describe_cmip7_model() -> None:
+    # Without Essential Model Documentation, the components are described.
     description = describe("CMIP7", "dataset", "ACCESS-ESM1-6")
     assert description is not None
     assert description.startswith("`ACCESS-ESM1-6`:\n\n- aerosol: classic\n")
-    assert description.endswith(
-        "[Essential Model Documentation](https://wcrp-cmip.github.io/"
-        "Essential-Model-Documentation/model/access-esm1-6)",
+    assert "Essential Model Documentation" not in description
+
+
+def test_describe_documented_cmip7_model(
+    documentation: dict[str, object],
+) -> None:
+    documentation["access-esm1-6"] = {"description": "A model."}
+    assert describe("CMIP7", "dataset", "ACCESS-ESM1-6") == (
+        "`ACCESS-ESM1-6`: A model.\n\n"
+        "[Essential Model Documentation of ACCESS-ESM1-6]"
+        "(https://wcrp-cmip.github.io/"
+        "Essential-Model-Documentation/docs/Data_Users/Model_viewer/"
+        "?model=access-esm1-6)"
     )
+
+
+@pytest.mark.online
+def test_describe_cmip7_model_online() -> None:
+    # Notice when the Essential Model Documentation changes.
+    description = describe("CMIP7", "dataset", "ACCESS-ESM1-6")
+    assert description is not None
+    assert "- aerosol:" not in description
+    assert "[Essential Model Documentation of ACCESS-ESM1-6]" in description
+
+
+def test_describe_cmip7_model_offline(
+    mocker: MockerFixture,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    mocker.patch.object(
+        vocabulary.requests,
+        "get",
+        side_effect=requests.ConnectionError("offline"),
+    )
+    description = describe("CMIP7", "dataset", "ACCESS-ESM1-6")
+    assert description is not None
+    assert description.startswith("`ACCESS-ESM1-6`:\n\n- aerosol: classic\n")
+    assert "Failed to download" in caplog.text
 
 
 @pytest.mark.parametrize(

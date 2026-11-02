@@ -4,6 +4,9 @@ The controlled vocabulary of a project is the ``<project>_CV.json`` file in
 its CMOR tables, for example ``CMIP6_CV.json`` for CMIP6. Projects that use
 the CMOR tables of another project, such as OBS6, do not use its controlled
 vocabulary.
+The models of CMIP7 are described by their Essential Model Documentation if
+it is available, see
+https://wcrp-cmip.github.io/Essential-Model-Documentation/.
 Projects are described by a link to their website, or to the documentation
 of ESMValTool or ESMValCore if they have none.
 """
@@ -12,10 +15,12 @@ from __future__ import annotations
 
 import functools
 import json
+import logging
 import re
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
+import requests
 from esmvalcore.cmor.table import get_tables
 from esmvalcore.config import CFG
 
@@ -24,6 +29,8 @@ from esmvaltool_language_server.esgf import intake_esgf_mapping
 
 if TYPE_CHECKING:
     from esmvaltool_language_server.context import Path
+
+logger = logging.getLogger(__name__)
 
 # Separators of the components of a model in its description: new lines
 # (CMIP6) or semicolons that are not in parentheses (CMIP7).
@@ -70,8 +77,14 @@ _PROJECT_DOCS = {
 # A released version, which has its own documentation.
 _RELEASE = re.compile(r"\d+\.\d+\.\d+")
 
-# The Essential Model Documentation of the models of CMIP7.
-_EMD_URL = "https://wcrp-cmip.github.io/Essential-Model-Documentation/model"
+# The Essential Model Documentation of the models of CMIP7: a page and a
+# JSON file for each model.
+_EMD_URL = "https://wcrp-cmip.github.io/Essential-Model-Documentation"
+_EMD_PAGE = f"{_EMD_URL}/docs/Data_Users/Model_viewer/?model={{model}}"
+_EMD_JSON = f"{_EMD_URL}/model/{{model}}.json"
+
+# Stop waiting for the Essential Model Documentation after this many seconds.
+_EMD_TIMEOUT = 5
 
 
 @functools.cache
@@ -128,16 +141,32 @@ def _join(items: object) -> str | None:
     return None
 
 
-def _describe_source(
-    project: str,
+@functools.cache
+def _emd_description(name: str) -> str | None:
+    """Get the description of a CMIP7 model from its documentation.
+
+    Returns :obj:`None` if the model is not documented or the documentation
+    cannot be downloaded.
+    """
+    url = _EMD_JSON.format(model=name.lower())
+    try:
+        response = requests.get(url, timeout=_EMD_TIMEOUT)
+        if response.status_code == requests.codes.not_found:
+            return None
+        response.raise_for_status()
+        description = _text(response.json(), "description")
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Failed to download %s: %s", url, exc)
+        return None
+    return description
+
+
+def _describe_components(
     name: str,
     entry: object,
-    prefix: str = "",
-) -> str | None:
-    """Describe a model by its components and institutions.
-
-    The prefix is ``driving_`` for the driving model of CORDEX-CMIP6.
-    """
+    prefix: str,
+) -> list[str] | None:
+    """Describe a model by its components in the controlled vocabulary."""
     source = _item(entry, f"{prefix}source")
     # CORDEX-CMIP6 lists descriptions with and without the year of the model.
     if isinstance(source, list) and source:
@@ -155,11 +184,31 @@ def _describe_source(
     parts = [heading] if heading else []
     if components:
         parts.append("\n".join(f"- {component}" for component in components))
+    return parts
+
+
+def _describe_source(
+    project: str,
+    name: str,
+    entry: object,
+    prefix: str = "",
+) -> str | None:
+    """Describe a model and its institutions.
+
+    CMIP7 models are described by their Essential Model Documentation, or by
+    their components in the controlled vocabulary if it is not available.
+    The prefix is ``driving_`` for the driving model of CORDEX-CMIP6.
+    """
+    description = _emd_description(name) if project == "CMIP7" else None
+    if description is not None:
+        parts = [description]
+    elif (parts := _describe_components(name, entry, prefix)) is None:
+        return None
     if institutions := _join(_item(entry, f"{prefix}institution_id")):
         parts.append(f"Institution: {institutions}")
-    if project == "CMIP7":
-        url = f"{_EMD_URL}/{name.lower()}"
-        parts.append(f"[Essential Model Documentation]({url})")
+    if description is not None:
+        url = _EMD_PAGE.format(model=name.lower())
+        parts.append(f"[Essential Model Documentation of {name}]({url})")
     return "\n\n".join(parts)
 
 

@@ -43,7 +43,9 @@ authors and references it defines.
   `activity`, `institute`, `grid`, or `ensemble`, shows its description
   in the controlled vocabulary of the project, for example CMIP6 or CMIP7,
   that is included in the CMOR tables that ESMValCore uses.
-  CMIP7 models are linked to their Essential Model Documentation.
+  CMIP7 models are described by, and linked to, their
+  [Essential Model Documentation](https://wcrp-cmip.github.io/Essential-Model-Documentation/),
+  which is downloaded when you hover over them.
   Hovering over the value of the `project` facet, such as `CMIP6`, links
   to the website of the project, or for projects without a website, such as
   `OBS6`, `native6`, or `ICON`, to the ESMValTool or ESMValCore

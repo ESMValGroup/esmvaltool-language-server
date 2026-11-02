@@ -227,7 +227,7 @@ def _supports_snippets(capabilities: types.ClientCapabilities) -> bool:
 
 
 @server.feature(types.TEXT_DOCUMENT_HOVER)
-def hover_(
+async def hover_(
     ls: RecipeLanguageServer,
     params: types.HoverParams,
 ) -> types.Hover | None:
@@ -235,7 +235,10 @@ def hover_(
     uri = params.text_document.uri
     document = ls.workspace.get_text_document(uri)
     codec = document.position_codec
-    result = hover(
+    # Describing a value may download documentation, so do not block the
+    # server.
+    result = await asyncio.to_thread(
+        hover,
         document.source,
         _position(document, params.position),
         ls.recipes.get(uri, MISSING),
