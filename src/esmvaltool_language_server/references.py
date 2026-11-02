@@ -1,4 +1,8 @@
-"""Find what a recipe refers to: preprocessors, tasks, scripts, and tags."""
+"""Find what a recipe refers to: preprocessors, tasks, datasets, and more.
+
+Besides preprocessors and tasks, recipes refer to the datasets of a variable
+group, diagnostic scripts, and tags.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from esmvaltool_language_server.schema import child
+from esmvaltool_language_server.schema import child, data_at
 
 if TYPE_CHECKING:
     from esmvaltool_language_server.context import Path
@@ -57,6 +61,14 @@ def is_script(path: Path) -> bool:
     return _matches(path, ("diagnostics", None, "scripts", None, "script"))
 
 
+def is_reference_dataset(path: Path) -> bool:
+    """Check if a path is the reference or alternative dataset of a group."""
+    return any(
+        _matches(path, ("diagnostics", None, "variables", None, key))
+        for key in ("reference_dataset", "alternative_dataset")
+    )
+
+
 def tag_section(path: Path) -> str | None:
     """Get the section of the tags that the item at a path refers to."""
     for pattern, section in _TAG_SECTIONS.items():
@@ -86,6 +98,70 @@ def task_names(recipe: object) -> list[str]:
                 f"{name}/{task}" for task in _keys(child(diagnostic, group))
             )
     return names
+
+
+def _datasets(recipe: object, group: Path) -> list[tuple[Path, dict]]:
+    """Get the datasets of a variable group, with their paths."""
+    paths = [
+        ("datasets",),
+        (*group[:2], "additional_datasets"),
+        (*group, "additional_datasets"),
+    ]
+    return [
+        ((*path, i), entry)
+        for path in paths
+        if isinstance(entries := data_at(recipe, path), list)
+        for i, entry in enumerate(entries)
+        if isinstance(entry, dict)
+    ]
+
+
+def dataset_names(recipe: object, path: Path) -> list[str]:
+    """Get the names and aliases of the datasets of a variable group.
+
+    Parameters
+    ----------
+    recipe:
+        The recipe.
+    path:
+        A path in the variable group, e.g. of its ``reference_dataset``.
+
+    Returns
+    -------
+    :
+        The names and aliases, in the order of the datasets.
+    """
+    names = (
+        entry.get(key)
+        for _, entry in _datasets(recipe, path[:4])
+        for key in ("dataset", "alias")
+    )
+    return list(dict.fromkeys(n for n in names if isinstance(n, str)))
+
+
+def dataset_paths(recipe: object, path: Path, name: str) -> list[Path]:
+    """Get the paths of the datasets of a variable group with a name or alias.
+
+    Parameters
+    ----------
+    recipe:
+        The recipe.
+    path:
+        A path in the variable group, e.g. of its ``reference_dataset``.
+    name:
+        The name or alias of the dataset.
+
+    Returns
+    -------
+    :
+        The paths of the ``alias`` or ``dataset`` keys that match the name.
+    """
+    return [
+        (*dataset_path, key)
+        for dataset_path, entry in _datasets(recipe, path[:4])
+        for key in ("alias", "dataset")
+        if entry.get(key) == name
+    ]
 
 
 def task_paths(name: str) -> list[Path]:

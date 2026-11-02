@@ -289,6 +289,11 @@ def _value_items(
             (name, types.CompletionItemKind.Reference, None)
             for name in references.task_names(recipe)
         )
+    elif references.is_reference_dataset(path):
+        candidates.extend(
+            (name, types.CompletionItemKind.Reference, None)
+            for name in references.dataset_names(recipe, path)
+        )
     elif references.is_script(path):
         candidates.extend(
             (name, types.CompletionItemKind.File, None)
