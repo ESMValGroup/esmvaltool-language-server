@@ -548,7 +548,7 @@ def test_definition_script(split_cursor: SplitCursor, tmp_path: Path) -> None:
     [
         (("- doe_jane", "- doe|_jane"), "config-references.yml", 1),
         (("[doe_jane", "[doe|_jane"), "config-references.yml", 1),
-        (("- phys", "- ph|ys"), "config-references.yml", 6),
+        (("- phys", "- ph|ys"), "config-references.yml", 7),
         (("doe21", "doe|21"), "references/doe21.bibtex", 0),
     ],
 )
