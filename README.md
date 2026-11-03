@@ -35,9 +35,12 @@ authors and references it defines.
   The facets of the other data sources that can be completed are those in
   the templates of their paths.
   The time range of the data, `timerange`, `start_year`, and `end_year`, is
-  completed from the dates of the files in the other data sources, and from
-  the most common first and last date of the datasets on the Solr indices of
-  ESGF; the other ESGF indices do not provide the dates of datasets.
+  completed from the dates of the files in the other data sources, from the
+  most common first and last date of the datasets on the Solr indices of
+  ESGF, and from the first and last date of up to 100 datasets on the STAC
+  indices of ESGF.
+  Dates are given with the month for monthly data and with the day for daily
+  and sub-daily data, and in years if the data covers whole years.
   Finding the values usually takes less than a second; until then, the values
   that the recipe schema allows are suggested.
   The values are remembered for 10 minutes.

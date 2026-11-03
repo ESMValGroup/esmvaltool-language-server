@@ -388,3 +388,80 @@ def test_time_values_unknown_project(
     assert not esgf.is_searchable(project, "timerange")
     assert esgf.facet_values(project, {}, "timerange") == []
     assert not solr_dates
+
+
+def _item(start: str, end: str, frequency: str) -> dict[str, Any]:
+    return {
+        "properties": {
+            "start_datetime": start,
+            "end_datetime": end,
+            "cmip6:frequency": frequency,
+        },
+    }
+
+
+@pytest.fixture
+def stac_dates(
+    monkeypatch: pytest.MonkeyPatch,
+    stac_session: _Session,
+) -> _Session:
+    """Use a STAC index with the first and last dates of datasets."""
+    queryables = stac_session.responses[
+        "https://stac/collections/CMIP6/queryables"
+    ]
+    queryables.data["properties"]["cmip6:frequency"] = {}  # type: ignore[index]
+    stac_session.responses["https://stac/search"] = _Response(
+        {
+            "features": [
+                _item("1850-01-16T12:00:00Z", "2014-12-16T12:00:00Z", "mon"),
+                _item("2015-01-01T00:00:00Z", "2101-01-01T00:00:00Z", "mon"),
+                _item("1850-03-01T12:00:00Z", "1999-11-30T12:00:00Z", "day"),
+                _item("1850-01-01T00:00:00Z", "1850-01-01T00:00:01Z", "fx"),
+            ],
+        },
+    )
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    monkeypatch.setattr(esgf, "_indices", lambda: [index])
+    return stac_session
+
+
+@pytest.mark.parametrize(
+    ("facet", "expected"),
+    [
+        ("timerange", ["*", "1850/2014", "18500301/19991130", "2015/2100"]),
+        ("start_year", ["1850", "2015"]),
+        ("end_year", ["1999", "2014", "2100"]),
+    ],
+)
+def test_stac_time_values(
+    stac_dates: _Session,
+    facet: str,
+    expected: list[str],
+) -> None:
+    facets = {"dataset": "CESM2", "short_name": "tas", "timerange": "*"}
+    assert esgf.is_searchable("CMIP6", facet)
+    assert esgf.facet_values("CMIP6", facets, facet) == expected
+    params = stac_dates.params[-1]
+    assert params["collections"] == "CMIP6"
+    assert params["fields"] == (
+        "properties.start_datetime,properties.end_datetime,"
+        "properties.cmip6:frequency"
+    )
+    assert params["filter"] == (
+        "\"cmip6:source_id\" IN ('CESM2') AND "
+        "\"cmip6:variable_id\" IN ('tas') AND latest=true"
+    )
+
+
+def test_stac_time_values_error(
+    stac_dates: _Session,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    stac_dates.responses["https://stac/search"] = _Response("error", 500)
+    assert esgf.facet_values("CMIP6", {}, "timerange") == []
+    assert "Failed to get the dates from STACESGFIndex('stac')" in caplog.text
+
+
+def test_stac_time_values_unknown_project(stac_dates: _Session) -> None:
+    assert esgf.facet_values("CMIP5", {}, "timerange") == []
+    assert not esgf.is_searchable("OBS6", "timerange")

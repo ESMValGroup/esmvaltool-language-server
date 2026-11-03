@@ -9,8 +9,9 @@ the configuration of the intake-esgf data source of ESMValCore for Globus and
 STAC indices, and with the facet mapping of :mod:`esmvalcore.io.esgf` for
 Solr indices. The version is not part of these mappings, ESMValCore adds the
 prefix "v" to the version of a dataset on ESGF.
-The time range of the datasets is only found on Solr indices, from the most
-common first and last date of the matching datasets.
+The time range of the datasets is found from the most common first and last
+date of the matching datasets on Solr indices, and from the first and last
+date of up to 100 matching datasets on STAC indices.
 """
 
 from __future__ import annotations
@@ -51,6 +52,10 @@ TIMEOUT = 10
 
 # The maximum number of values of a facet to get from an index.
 _MAX_VALUES = 1000
+
+# The maximum number of datasets to get the dates of from a STAC index. Some
+# indices send the complete datasets, which are about 100 kB each.
+_MAX_DATASETS = 100
 
 # Errors when an index cannot be reached or gives an unexpected answer.
 _ERRORS = (requests.RequestException, globus_sdk.GlobusError, LookupError)
@@ -254,6 +259,34 @@ def _cql2_text(name: str, values: list[str]) -> str:
     return f'"{name}" IN ({quoted})'
 
 
+def _stac_name(collection: _Collection, project: str, field: str) -> str:
+    """Get the name of a property in a STAC collection."""
+    # Properties that are specific to a project start with its name.
+    prefixed = f"{project.lower()}:{field}"
+    return prefixed if prefixed in collection.queryables else field
+
+
+def _stac_filter(
+    collection: _Collection,
+    project: str,
+    query: Query,
+) -> dict[str, str]:
+    """Get the parameters that select the latest datasets matching a query."""
+    conditions = [
+        _cql2_text(name, values)
+        for key, values in query.items()
+        if key != "project"
+        and (name := _stac_name(collection, project, key))
+        in collection.queryables
+    ]
+    conditions.extend(
+        f"{key}={value}"
+        for key, value in (("latest", "true"), ("retracted", "false"))
+        if key in collection.queryables
+    )
+    return {"filter-lang": "cql2-text", "filter": " AND ".join(conditions)}
+
+
 def _stac_values(
     index: STACESGFIndex,
     query: Query,
@@ -263,31 +296,15 @@ def _stac_values(
     collection = _stac_collection(index.url, project)
     if collection is None:
         return {}
-
-    def name(field: str) -> str:
-        # Properties that are specific to a project start with its name.
-        prefixed = f"{project.lower()}:{field}"
-        return prefixed if prefixed in collection.queryables else field
-
-    aggregation = name(field).replace(":", "_") + "_frequency"
+    name = _stac_name(collection, project, field)
+    aggregation = name.replace(":", "_") + "_frequency"
     if aggregation not in collection.aggregations:
         return {}
-    conditions = [
-        _cql2_text(name(key), values)
-        for key, values in query.items()
-        if key != "project" and name(key) in collection.queryables
-    ]
-    conditions.extend(
-        f"{key}={value}"
-        for key, value in (("latest", "true"), ("retracted", "false"))
-        if key in collection.queryables
-    )
     response = index.session.get(
         f"{collection.url}/aggregate",
         params={
             "aggregations": aggregation,
-            "filter-lang": "cql2-text",
-            "filter": " AND ".join(conditions),
+            **_stac_filter(collection, project, query),
         },
         timeout=TIMEOUT,
     )
@@ -352,10 +369,11 @@ def is_searchable(project: str, facet: str) -> bool:
     -------
     :
         Whether the facet is known on one of the enabled indices, or selects
-        the time range and a Solr index is enabled.
+        the time range and a Solr or STAC index that knows the project is
+        enabled.
     """
     if facet in timerange.FACETS:
-        return bool(_solr_indices(project))
+        return bool(_time_indices(project))
     return facet != "project" and facet in known_facets(project)
 
 
@@ -401,11 +419,71 @@ def facet_values(
         return sorted(set().union(*pool.map(search, jobs)))
 
 
-def _solr_indices(project: str) -> list[SolrESGFIndex]:
-    """Get the enabled Solr indices, if they know the project."""
-    if _solr_mapping(project) is None:
+def _time_indices(project: str) -> list[SolrESGFIndex | STACESGFIndex]:
+    """Get the enabled indices that know the dates of datasets of a project."""
+    return [
+        index
+        for index in _indices()
+        if isinstance(index, SolrESGFIndex | STACESGFIndex)
+        and _mapping(index, project) is not None
+    ]
+
+
+def _solr_ranges(index: SolrESGFIndex, query: Query) -> list[tuple[str, str]]:
+    """Get the most common first and last date of datasets on Solr."""
+    start, end = (
+        max(counts, key=counts.__getitem__, default=None)
+        for counts in (_index_values(index, query, f) for f in _SOLR_DATES)
+    )
+    if start is None or end is None:
         return []
-    return [index for index in _indices() if isinstance(index, SolrESGFIndex)]
+    # The frequency is not known, so the dates are given in years.
+    found = timerange.from_iso(start, end, "yr")
+    return [] if found is None else [found]
+
+
+def _stac_ranges(index: STACESGFIndex, query: Query) -> list[tuple[str, str]]:
+    """Get the first and last date of the datasets on STAC."""
+    project = query.get("project", [""])[0]
+    collection = _stac_collection(index.url, project)
+    if collection is None:
+        return []
+    fields = ("start_datetime", "end_datetime", "frequency")
+    names = [_stac_name(collection, project, f) for f in fields]
+    # Some indices ignore the filter of the items of a collection, but not
+    # that of a search.
+    response = index.session.get(
+        f"https://{index.url}/search",
+        params={
+            "collections": collection.url.rsplit("/", 1)[-1],
+            "limit": _MAX_DATASETS,
+            "fields": ",".join(f"properties.{n}" for n in names),
+            **_stac_filter(collection, project, query),
+        },
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    ranges = []
+    for item in response.json()["features"]:
+        start, end, frequency = (item["properties"].get(n) for n in names)
+        if start and end:
+            found = timerange.from_iso(start, end, frequency)
+            ranges.extend([] if found is None else [found])
+    return ranges
+
+
+def _index_ranges(
+    index: SolrESGFIndex | STACESGFIndex,
+    query: Query,
+) -> list[tuple[str, str]]:
+    """Get the first and last date of datasets on an index."""
+    try:
+        if isinstance(index, SolrESGFIndex):
+            return _solr_ranges(index, query)
+        return _stac_ranges(index, query)
+    except _ERRORS as exc:
+        logger.warning("Failed to get the dates from %s: %s", index, exc)
+        return []
 
 
 def _time_values(
@@ -413,20 +491,18 @@ def _time_values(
     facets: Mapping[object, object],
     facet: str,
 ) -> list[str]:
-    """Get the values of a time facet from the dates on Solr indices."""
-    indices = _solr_indices(project)
-    mapping = _solr_mapping(project)
-    if not indices or mapping is None:
+    """Get the values of a time facet from the dates of datasets."""
+    indices = _time_indices(project)
+    if not indices:
         return []
-    query = mapping.query({**facets, "project": project}, facet)
 
-    def search(index: SolrESGFIndex) -> tuple[str, str] | None:
-        start, end = (
-            max(counts, key=counts.__getitem__, default=None)
-            for counts in (_index_values(index, query, f) for f in _SOLR_DATES)
-        )
-        return None if start is None or end is None else (start, end)
+    def search(index: SolrESGFIndex | STACESGFIndex) -> list[tuple[str, str]]:
+        mapping = _mapping(index, project)
+        if mapping is None:
+            return []
+        query = mapping.query({**facets, "project": project}, facet)
+        return _index_ranges(index, query)
 
     with ThreadPoolExecutor(max_workers=len(indices)) as pool:
-        ranges = [found for found in pool.map(search, indices) if found]
+        ranges = [r for found in pool.map(search, indices) for r in found]
     return timerange.suggestions(facet, ranges)
