@@ -390,23 +390,22 @@ def test_time_values_unknown_project(
     assert not solr_dates
 
 
-def _item(
-    start: str,
-    end: str,
-    frequency: str,
-    dataset_id: str = "",
-) -> dict[str, Any]:
-    experiment = dataset_id.split(".")[4] if dataset_id else ""
+def _item(exp: str, member: str, *dates: str) -> dict[str, Any]:
+    """Create a STAC item of a dataset with a file for each time range."""
+    activity = "CMIP" if exp == "historical" else "ScenarioMIP"
+    names = [f"tas_Amon_CESM2_{exp}_{member}_gn_{d}.nc" for d in dates]
+    assets = {
+        f"{host}{i}": {"href": f"https://{host}/data/{name}"}
+        for i, name in enumerate(names)
+        for host in ("a.org", "b.org")
+    }
+    assets["kerchunk"] = {"href": "https://a.org/dataset.parq"}
     return {
-        "id": dataset_id or f"{start}.{end}.{frequency}.v1",
+        "id": f"CMIP6.{activity}.NCAR.CESM2.{exp}.{member}.Amon.tas.gn.v1",
+        "assets": assets,
         "properties": {
-            "start_datetime": start,
-            "end_datetime": end,
-            "cmip6:frequency": frequency,
-            "cmip6:experiment_id": experiment,
-            "cmip6:activity_id": [dataset_id.split(".")[1]]
-            if experiment
-            else [],
+            "cmip6:experiment_id": exp,
+            "cmip6:activity_id": [activity],
         },
     }
 
@@ -416,20 +415,29 @@ def stac_dates(
     monkeypatch: pytest.MonkeyPatch,
     stac_session: _Session,
 ) -> _Session:
-    """Use a STAC index with the first and last dates of datasets."""
+    """Use a STAC index with the files of datasets."""
     queryables = stac_session.responses[
         "https://stac/collections/CMIP6/queryables"
     ]
     properties = queryables.data["properties"]  # type: ignore[index]
-    for name in ("experiment_id", "activity_id", "frequency"):
+    for name in ("experiment_id", "activity_id"):
         properties[f"cmip6:{name}"] = {}
     stac_session.responses["https://stac/search"] = _Response(
         {
             "features": [
-                _item("1850-01-16T12:00:00Z", "2014-12-16T12:00:00Z", "mon"),
-                _item("2015-01-01T00:00:00Z", "2101-01-01T00:00:00Z", "mon"),
-                _item("1850-03-01T12:00:00Z", "1999-11-30T12:00:00Z", "day"),
-                _item("1850-01-01T00:00:00Z", "1850-01-01T00:00:01Z", "fx"),
+                _item(
+                    "historical",
+                    "r1i1p1f1",
+                    "185001-194912",
+                    "1950-01-2014-12",
+                ),
+                _item("historical", "r2i1p1f1", "18500301-19991130"),
+                # A year without data.
+                _item(
+                    "historical", "r3i1p1f1", "185001-189912", "190101-201412"
+                ),
+                # No dates.
+                _item("historical", "r4i1p1f1", ""),
             ],
         },
     )
@@ -441,9 +449,12 @@ def stac_dates(
 @pytest.mark.parametrize(
     ("facet", "expected"),
     [
-        ("timerange", ["*", "1850/2014", "18500301/19991130", "2015/2100"]),
-        ("start_year", ["1850", "2015"]),
-        ("end_year", ["1999", "2014", "2100"]),
+        (
+            "timerange",
+            ["*", "1850/1899", "1850/2014", "18500301/19991130", "1901/2014"],
+        ),
+        ("start_year", ["1850", "1901"]),
+        ("end_year", ["1899", "1999", "2014"]),
     ],
 )
 def test_stac_time_values(
@@ -462,9 +473,7 @@ def test_stac_time_values(
     params = stac_dates.params[-1]
     assert params["collections"] == "CMIP6"
     assert params["fields"] == (
-        "id,properties.start_datetime,properties.end_datetime,"
-        "properties.cmip6:frequency,properties.cmip6:experiment_id,"
-        "properties.cmip6:activity_id"
+        "id,assets,properties.cmip6:experiment_id,properties.cmip6:activity_id"
     )
     assert params["filter"] == (
         "\"cmip6:source_id\" IN ('CESM2') AND "
@@ -506,42 +515,14 @@ def test_solr_time_values_without_experiment(
 
 
 def test_stac_time_values_of_experiments(stac_dates: _Session) -> None:
-    def dataset(activity: str, exp: str, member: str) -> str:
-        return f"CMIP6.{activity}.NCC.CESM2.{exp}.{member}.Amon.tas.gn.v1"
-
     stac_dates.responses["https://stac/search"] = _Response(
         {
             "features": [
-                _item(
-                    "1850-01-16T12:00:00Z",
-                    "2014-12-16T12:00:00Z",
-                    "mon",
-                    dataset("CMIP", "historical", "r1i1p1f1"),
-                ),
-                _item(
-                    "2015-01-16T12:00:00Z",
-                    "2100-12-16T12:00:00Z",
-                    "mon",
-                    dataset("ScenarioMIP", "ssp585", "r1i1p1f1"),
-                ),
-                _item(
-                    "1850-01-16T12:00:00Z",
-                    "2014-12-16T12:00:00Z",
-                    "mon",
-                    dataset("CMIP", "historical", "r2i1p1f1"),
-                ),
-                _item(
-                    "1850-01-16T12:00:00Z",
-                    "2014-12-16T12:00:00Z",
-                    "mon",
-                    dataset("CMIP", "historical", "r3i1p1f1"),
-                ),
-                _item(
-                    "2016-01-16T12:00:00Z",
-                    "2100-12-16T12:00:00Z",
-                    "mon",
-                    dataset("ScenarioMIP", "ssp585", "r3i1p1f1"),
-                ),
+                _item("historical", "r1i1p1f1", "185001-201412"),
+                _item("ssp585", "r1i1p1f1", "201501-210012"),
+                _item("historical", "r2i1p1f1", "185001-201412"),
+                _item("historical", "r3i1p1f1", "185001-201412"),
+                _item("ssp585", "r3i1p1f1", "201601-210012"),
             ],
         },
     )

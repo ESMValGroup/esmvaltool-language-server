@@ -14,14 +14,9 @@ FACETS = frozenset({"timerange", "start_year", "end_year"})
 # Any time range, so all available data is used.
 _ANY = "*"
 
-# The number of digits of the year, month, and day at the start of a date.
+# The number of digits of the year and the day at the start of a date.
 _YEAR_DIGITS = 4
-_MONTH_DIGITS = 6
 _DAY_DIGITS = 8
-
-# The number of digits of a date for the frequencies of the data. Dates of
-# data with other frequencies, e.g. sub-daily, are given with the day.
-_DIGITS = {"dec": _YEAR_DIGITS, "yr": _YEAR_DIGITS, "mon": _MONTH_DIGITS}
 
 # The month and day after the year of the first and last date of a time range
 # that covers whole years, including those in a 360-day calendar.
@@ -37,26 +32,8 @@ def _year(date: str) -> str | None:
     return str(int(year))
 
 
-def _start(date: dt.datetime, digits: int) -> dt.datetime:
-    """Get the start of the year, month, or day that contains a date."""
-    date = date.replace(hour=0, minute=0, second=0, microsecond=0)
-    if digits <= _MONTH_DIGITS:
-        date = date.replace(day=1)
-    if digits <= _YEAR_DIGITS:
-        date = date.replace(month=1)
-    return date
-
-
-def _format(date: dt.datetime, digits: int) -> str:
-    return f"{date.year:04d}{date.month:02d}{date.day:02d}"[:digits]
-
-
-def from_iso(
-    start: str,
-    end: str,
-    frequency: str | None,
-) -> tuple[str, str] | None:
-    """Get the first and last date of data from ISO 8601 times.
+def from_iso(start: str, end: str) -> tuple[str, str] | None:
+    """Get the years of the first and last data from ISO 8601 times.
 
     Parameters
     ----------
@@ -64,29 +41,20 @@ def from_iso(
         The time of the first data, or the start of its period.
     end:
         The time of the last data, or the end of its period.
-    frequency:
-        The frequency of the data, e.g. ``mon``.
 
     Returns
     -------
     :
-        The dates, with the year, month, or day depending on the frequency.
-        An end at the start of a year, month, or day is the end of the
-        previous one, e.g. ``2101-01-01T00:00:00Z`` is in December 2100 for
-        monthly data. ``None`` for data without a time.
+        The years. An end at the start of a year is the end of the previous
+        year. ``None`` if the times cannot be read.
     """
-    if frequency == "fx":
-        return None
-    digits = _DIGITS.get(str(frequency), _DAY_DIGITS)
     try:
-        first, last = (
-            dt.datetime.fromisoformat(time) for time in (start, end)
-        )
+        first, last = (dt.datetime.fromisoformat(t) for t in (start, end))
     except ValueError:
         return None
-    if first < last == _start(last, digits):
+    if first < last == dt.datetime(last.year, 1, 1, tzinfo=last.tzinfo):
         last -= dt.timedelta(seconds=1)
-    return _format(first, digits), _format(last, digits)
+    return f"{first.year:04d}", f"{last.year:04d}"
 
 
 def _range(start: str, end: str) -> str:

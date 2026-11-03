@@ -11,8 +11,11 @@ Solr indices. The version is not part of these mappings, ESMValCore adds the
 prefix "v" to the version of a dataset on ESGF.
 The time range of the datasets is found from the most common first and last
 date of the matching datasets on Solr indices, and from the first and last
-date of up to 100 matching datasets on STAC indices, once the experiment
-is known.
+date of the files of up to 100 matching datasets on STAC indices, once the
+experiment is known.
+Like ESMValCore, the dates of files are read from their names.
+The time ranges of the experiments of a dataset are joined, but not across
+years without data, because ESMValCore stops if there is no data for a year.
 """
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ import requests
 import yaml
 from esmvalcore.config import CFG
 from esmvalcore.io.esgf.facets import DATASET_MAP, FACETS
+from esmvalcore.io.local import _get_start_end_date_from_filename
 from intake_esgf.core.globus import GlobusESGFIndex
 from intake_esgf.core.solr import SolrESGFIndex
 from intake_esgf.core.stac import STACESGFIndex
@@ -464,8 +468,7 @@ def _solr_ranges(
         )
         if start is None or end is None:
             return None
-        # The frequency is not known, so the dates are given in years.
-        return timerange.from_iso(start, end, "yr")
+        return timerange.from_iso(start, end)
 
     queries = [
         {**query, experiment: [exp]} for exp in query.get(experiment, [])
@@ -486,21 +489,39 @@ def _dataset_key(item: dict[str, Any], names: Iterable[str]) -> str:
     return ".".join(p for p in parts if p not in differ)
 
 
+def _file_ranges(item: dict[str, Any]) -> list[tuple[str, str]]:
+    """Get the first and last date of the files of a dataset on STAC.
+
+    The dates are read from the file names, like ESMValCore does.
+    """
+    names = {
+        str(asset.get("href", "")).rsplit("/", 1)[-1]
+        for asset in item.get("assets", {}).values()
+    }
+    ranges = []
+    for name in sorted(n for n in names if n.endswith(".nc")):
+        try:
+            start, end = _get_start_end_date_from_filename(name)
+        except ValueError:
+            continue
+        if start is not None and end is not None:
+            ranges.append((start.replace("-", ""), end.replace("-", "")))
+    return ranges
+
+
 def _stac_ranges(
     index: STACESGFIndex,
     query: Query,
     experiment: str,
 ) -> list[tuple[str, str]]:
-    """Get the first and last date of the datasets on STAC.
+    """Get the time ranges without missing years of datasets on STAC.
 
-    The time ranges of the experiments of a dataset are joined.
+    The files of the experiments of a dataset are joined.
     """
     project = query.get("project", [""])[0]
     collection = _stac_collection(index.url, project)
     if collection is None:
         return []
-    fields = ("start_datetime", "end_datetime", "frequency")
-    names = [_stac_name(collection, project, f) for f in fields]
     differ = [
         _stac_name(collection, project, f) for f in (experiment, "activity_id")
     ]
@@ -512,7 +533,7 @@ def _stac_ranges(
             "collections": collection.url.rsplit("/", 1)[-1],
             "limit": _MAX_DATASETS,
             "fields": ",".join(
-                ["id", *(f"properties.{n}" for n in [*names, *differ])],
+                ["id", "assets", *(f"properties.{n}" for n in differ)],
             ),
             **_stac_filter(collection, project, query),
         },
@@ -521,14 +542,8 @@ def _stac_ranges(
     response.raise_for_status()
     datasets: dict[str, list[tuple[str, str]]] = {}
     for item in response.json()["features"]:
-        start, end, frequency = (item["properties"].get(n) for n in names)
-        found = (
-            timerange.from_iso(start, end, frequency)
-            if start and end
-            else None
-        )
-        if found is not None:
-            datasets.setdefault(_dataset_key(item, differ), []).append(found)
+        key = _dataset_key(item, differ)
+        datasets.setdefault(key, []).extend(_file_ranges(item))
     return [r for found in datasets.values() for r in _join(found)]
 
 
