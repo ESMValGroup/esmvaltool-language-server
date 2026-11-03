@@ -23,6 +23,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -34,7 +35,6 @@ import requests
 import yaml
 from esmvalcore.config import CFG
 from esmvalcore.io.esgf.facets import DATASET_MAP, FACETS
-from esmvalcore.io.local import _get_start_end_date_from_filename
 from intake_esgf.core.globus import GlobusESGFIndex
 from intake_esgf.core.solr import SolrESGFIndex
 from intake_esgf.core.stac import STACESGFIndex
@@ -70,6 +70,11 @@ _VERSION_PREFIX = "v"
 
 # The fields of the first and last date of a dataset on Solr indices.
 _SOLR_DATES = ("datetime_start", "datetime_stop")
+
+# The first and last date at the end of the name of a file on ESGF, e.g.
+# tas_Amon_CESM2_historical_r1i1p1f1_gn_185001-201412.nc, with the suffix of
+# climatologies. Files without a time have no dates.
+_FILE_DATES = re.compile(r"_(\d{4,14})-(\d{4,14})(?:-clim)?\.nc$")
 
 # The facet of the experiment. The time range of the datasets on ESGF is only
 # found if the experiment is known.
@@ -489,24 +494,13 @@ def _dataset_key(item: dict[str, Any], names: Iterable[str]) -> str:
     return ".".join(p for p in parts if p not in differ)
 
 
-def _file_ranges(item: dict[str, Any]) -> list[tuple[str, str]]:
-    """Get the first and last date of the files of a dataset on STAC.
-
-    The dates are read from the file names, like ESMValCore does.
-    """
-    names = {
-        str(asset.get("href", "")).rsplit("/", 1)[-1]
+def _file_ranges(item: dict[str, Any]) -> set[tuple[str, str]]:
+    """Get the first and last date of the files of a dataset on STAC."""
+    return {
+        (match[1], match[2])
         for asset in item.get("assets", {}).values()
+        if (match := _FILE_DATES.search(str(asset.get("href", ""))))
     }
-    ranges = []
-    for name in sorted(n for n in names if n.endswith(".nc")):
-        try:
-            start, end = _get_start_end_date_from_filename(name)
-        except ValueError:
-            continue
-        if start is not None and end is not None:
-            ranges.append((start.replace("-", ""), end.replace("-", "")))
-    return ranges
 
 
 def _stac_ranges(
