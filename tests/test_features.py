@@ -199,7 +199,8 @@ def test_complete_facet_values_not_found(split_cursor: SplitCursor) -> None:
         ("tier", ["2", "true"], ["2", "'true'"]),
         ("version", ["1", "v2"], ["'1'", "v2"]),
         ("timerange", ["*", "1850/2014"], ["'*'", "1850/2014"]),
-        ("start_year", ["1850"], ["1850"]),
+        # The years are found from the time ranges.
+        ("start_year", ["*", "1850/2014"], ["1850"]),
     ],
 )
 def test_complete_facet_values_types(
@@ -261,6 +262,29 @@ def test_complete_keys_without_unused_facets(
 def test_no_facet_values_without_facet(path: tuple[str | int, ...]) -> None:
     recipe = {"datasets": [{"project": "CMIP6"}]}
     assert completion._available_values(path, recipe, lambda *_: ["A"]) == []
+
+
+def test_time_range_of_all_datasets() -> None:
+    """A time range of a variable group selects data of all its datasets."""
+    recipe = {
+        "datasets": [
+            {"project": "CMIP6"},
+            {"project": "CMIP7"},
+            {"project": "unknown"},
+        ],
+        "diagnostics": {"diag": {"variables": {"tas": {}}}},
+    }
+    ranges = {
+        "CMIP6": ["*", "1850/2014", "185006/185012"],
+        "CMIP7": ["*", "1850/2021"],
+    }
+    path = ("diagnostics", "diag", "variables", "tas", "timerange")
+    values = completion._available_values(
+        path,
+        recipe,
+        lambda project, _, facet: ranges.get(project, [facet]),
+    )
+    assert values == ["*", "1850/2014", "185006/185012"]
 
 
 def test_complete_branding_suffix_available(

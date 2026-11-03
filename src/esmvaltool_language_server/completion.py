@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 import yaml
 from lsprotocol import types
 
-from esmvaltool_language_server import cmor, references
+from esmvaltool_language_server import cmor, references, timerange
 from esmvaltool_language_server.context import Context, context_at
 from esmvaltool_language_server.schema import (
     MISSING,
@@ -316,12 +316,22 @@ def _available_values(
         path = path[:-1]
     if not path or not isinstance(path[-1], str):
         return []
-    values: set[str] = set()
-    for facets in cmor.dataset_facets(path[:-1], recipe):
-        project = facets.get("project")
-        if cmor.is_name(project):
-            values.update(facet_values(str(project), facets, path[-1]) or [])
-    return sorted(values)
+    facet = path[-1]
+    is_time = facet in timerange.FACETS
+    found = [
+        facet_values(
+            str(project),
+            facets,
+            "timerange" if is_time else facet,
+        )
+        or []
+        for facets in cmor.dataset_facets(path[:-1], recipe)
+        if cmor.is_name(project := facets.get("project"))
+    ]
+    if is_time:
+        # The time range of a variable group applies to all its datasets.
+        return timerange.overlap(facet, found)
+    return sorted(set().union(*found))
 
 
 def _typed(value: str, allowed: set[str]) -> object:

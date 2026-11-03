@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import datetime as dt
 from typing import TYPE_CHECKING
 
@@ -118,3 +119,56 @@ def suggestions(facet: str, ranges: Iterable[tuple[str, str]]) -> list[str]:
     if not ranges:
         return []
     return [_ANY, *sorted({_range(start, end) for start, end in ranges})]
+
+
+def _dates(value: str) -> tuple[str, str] | None:
+    """Get the first and last day of a time range from :func:`suggestions`.
+
+    The last day of a month is that in the standard calendar.
+    """
+    start, slash, end = value.partition("/")
+    if not (slash and start.isdigit() and end.isdigit()):
+        return None
+    if len(start) <= _YEAR_DIGITS:
+        start = f"{start.zfill(_YEAR_DIGITS)}01"
+    if len(end) <= _YEAR_DIGITS:
+        end = f"{end.zfill(_YEAR_DIGITS)}12"
+    if len(end) == _MONTH_DIGITS:
+        year, month = int(end[:_YEAR_DIGITS]), int(end[_YEAR_DIGITS:])
+        end += f"{calendar.monthrange(year, month)[1]:02d}"
+    return f"{start}01"[:_DAY_DIGITS], end[:_DAY_DIGITS]
+
+
+def overlap(facet: str, suggested: Iterable[Iterable[str]]) -> list[str]:
+    """Get the values of a time facet that select data of all datasets.
+
+    Parameters
+    ----------
+    facet:
+        The facet, one of :obj:`FACETS`.
+    suggested:
+        The values of ``timerange`` from :func:`suggestions` for each
+        dataset. Datasets without time ranges are ignored.
+
+    Returns
+    -------
+    :
+        The values of the facet, like :func:`suggestions`, for the parts of
+        the time ranges that the datasets have in common.
+    """
+    common: set[tuple[str, str]] | None = None
+    for values in suggested:
+        ranges = {dates for v in values if (dates := _dates(v))}
+        if not ranges:
+            continue
+        common = (
+            ranges
+            if common is None
+            else {
+                (max(start, other_start), min(end, other_end))
+                for start, end in common
+                for other_start, other_end in ranges
+                if max(start, other_start) <= min(end, other_end)
+            }
+        )
+    return suggestions(facet, common or [])

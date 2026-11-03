@@ -67,6 +67,40 @@ def test_suggestions_without_ranges() -> None:
 
 
 @pytest.mark.parametrize(
+    ("facet", "suggested", "expected"),
+    [
+        (
+            "timerange",
+            [["*", "1850/2014"], ["*", "1850/2021"]],
+            ["*", "1850/2014"],
+        ),
+        (
+            "timerange",
+            [["*", "850/1850", "195003/201411"], ["*", "1850/2014"]],
+            ["*", "1850/1850", "195003/201411"],
+        ),
+        (
+            "timerange",
+            [["*", "19500115/20141231"], ["*", "195001/195006"]],
+            ["*", "19500115/19500630"],
+        ),
+        # Datasets without time ranges are ignored.
+        ("timerange", [["*", "1850/2014"], []], ["*", "1850/2014"]),
+        ("timerange", [["*", "1850/1900"], ["*", "1950/2014"]], []),
+        ("timerange", [], []),
+        ("start_year", [["*", "1850/2014"], ["*", "1900/2021"]], ["1900"]),
+        ("end_year", [["*", "1850/2014"], ["*", "1900/2021"]], ["2014"]),
+    ],
+)
+def test_overlap(
+    facet: str,
+    suggested: list[list[str]],
+    expected: list[str],
+) -> None:
+    assert timerange.overlap(facet, suggested) == expected
+
+
+@pytest.mark.parametrize(
     ("start", "end", "expected"),
     [
         ("1850-01-16T12:00:00Z", "2014-12-16T12:00:00Z", ("1850", "2014")),
