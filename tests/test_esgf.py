@@ -390,12 +390,23 @@ def test_time_values_unknown_project(
     assert not solr_dates
 
 
-def _item(start: str, end: str, frequency: str) -> dict[str, Any]:
+def _item(
+    start: str,
+    end: str,
+    frequency: str,
+    dataset_id: str = "",
+) -> dict[str, Any]:
+    experiment = dataset_id.split(".")[4] if dataset_id else ""
     return {
+        "id": dataset_id or f"{start}.{end}.{frequency}.v1",
         "properties": {
             "start_datetime": start,
             "end_datetime": end,
             "cmip6:frequency": frequency,
+            "cmip6:experiment_id": experiment,
+            "cmip6:activity_id": [dataset_id.split(".")[1]]
+            if experiment
+            else [],
         },
     }
 
@@ -410,7 +421,8 @@ def stac_dates(
         "https://stac/collections/CMIP6/queryables"
     ]
     properties = queryables.data["properties"]  # type: ignore[index]
-    properties["cmip6:experiment_id"] = properties["cmip6:frequency"] = {}
+    for name in ("experiment_id", "activity_id", "frequency"):
+        properties[f"cmip6:{name}"] = {}
     stac_session.responses["https://stac/search"] = _Response(
         {
             "features": [
@@ -450,8 +462,9 @@ def test_stac_time_values(
     params = stac_dates.params[-1]
     assert params["collections"] == "CMIP6"
     assert params["fields"] == (
-        "properties.start_datetime,properties.end_datetime,"
-        "properties.cmip6:frequency"
+        "id,properties.start_datetime,properties.end_datetime,"
+        "properties.cmip6:frequency,properties.cmip6:experiment_id,"
+        "properties.cmip6:activity_id"
     )
     assert params["filter"] == (
         "\"cmip6:source_id\" IN ('CESM2') AND "
@@ -490,3 +503,66 @@ def test_solr_time_values_without_experiment(
 ) -> None:
     assert esgf.facet_values("CMIP6", {"dataset": "CESM2"}, "timerange") == []
     assert not solr_dates
+
+
+def test_stac_time_values_of_experiments(stac_dates: _Session) -> None:
+    def dataset(activity: str, exp: str, member: str) -> str:
+        return f"CMIP6.{activity}.NCC.CESM2.{exp}.{member}.Amon.tas.gn.v1"
+
+    stac_dates.responses["https://stac/search"] = _Response(
+        {
+            "features": [
+                _item(
+                    "1850-01-16T12:00:00Z",
+                    "2014-12-16T12:00:00Z",
+                    "mon",
+                    dataset("CMIP", "historical", "r1i1p1f1"),
+                ),
+                _item(
+                    "2015-01-16T12:00:00Z",
+                    "2100-12-16T12:00:00Z",
+                    "mon",
+                    dataset("ScenarioMIP", "ssp585", "r1i1p1f1"),
+                ),
+                _item(
+                    "1850-01-16T12:00:00Z",
+                    "2014-12-16T12:00:00Z",
+                    "mon",
+                    dataset("CMIP", "historical", "r2i1p1f1"),
+                ),
+            ],
+        },
+    )
+    facets = {"dataset": "CESM2", "exp": ["historical", "ssp585"]}
+    assert esgf.facet_values("CMIP6", facets, "timerange") == [
+        "*",
+        "1850/2014",
+        "1850/2100",
+    ]
+
+
+def test_solr_time_values_of_experiments(
+    monkeypatch: pytest.MonkeyPatch,
+    solr_dates: list[esgf.Query],
+) -> None:
+    dates = {
+        "historical": ("1850-01-15T12:00:00Z", "2014-12-15T12:00:00Z"),
+        "ssp585": ("2015-01-15T12:00:00Z", "2100-12-15T12:00:00Z"),
+    }
+
+    def index_values(
+        _index: esgf.Index,
+        query: esgf.Query,
+        field: str,
+    ) -> dict[str, int]:
+        solr_dates.append(query)
+        (exp,) = query["experiment_id"]
+        return {dates[exp][field == "datetime_stop"]: 1}
+
+    monkeypatch.setattr(esgf, "_index_values", index_values)
+    facets = {"dataset": "CESM2", "exp": ["historical", "ssp585"]}
+    assert esgf.facet_values("CMIP6", facets, "timerange") == [
+        "*",
+        "1850/2100",
+    ]
+    assert len(solr_dates) == 4

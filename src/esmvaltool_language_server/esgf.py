@@ -39,7 +39,7 @@ from esmvaltool_language_server import timerange
 from esmvaltool_language_server.cmor import is_name
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
     Index = GlobusESGFIndex | SolrESGFIndex | STACESGFIndex
     Query = dict[str, list[str]]
@@ -434,27 +434,69 @@ def _time_indices(project: str) -> list[SolrESGFIndex | STACESGFIndex]:
     ]
 
 
-def _solr_ranges(index: SolrESGFIndex, query: Query) -> list[tuple[str, str]]:
+def _join(ranges: Iterable[tuple[str, str]]) -> tuple[str, str] | None:
+    """Join the time ranges of the experiments of a dataset."""
+    ranges = list(ranges)
+    if not ranges:
+        return None
+    return min(s for s, _ in ranges), max(e for _, e in ranges)
+
+
+def _solr_ranges(
+    index: SolrESGFIndex,
+    query: Query,
+    experiment: str,
+) -> list[tuple[str, str]]:
     """Get the most common first and last date of datasets on Solr."""
-    start, end = (
-        max(counts, key=counts.__getitem__, default=None)
-        for counts in (_index_values(index, query, f) for f in _SOLR_DATES)
-    )
-    if start is None or end is None:
-        return []
-    # The frequency is not known, so the dates are given in years.
-    found = timerange.from_iso(start, end, "yr")
+
+    def most_common(query: Query) -> tuple[str, str] | None:
+        start, end = (
+            max(counts, key=counts.__getitem__, default=None)
+            for counts in (_index_values(index, query, f) for f in _SOLR_DATES)
+        )
+        if start is None or end is None:
+            return None
+        # The frequency is not known, so the dates are given in years.
+        return timerange.from_iso(start, end, "yr")
+
+    queries = [
+        {**query, experiment: [exp]} for exp in query.get(experiment, [])
+    ] or [query]
+    found = _join(r for q in queries if (r := most_common(q)) is not None)
     return [] if found is None else [found]
 
 
-def _stac_ranges(index: STACESGFIndex, query: Query) -> list[tuple[str, str]]:
-    """Get the first and last date of the datasets on STAC."""
+def _dataset_key(item: dict[str, Any], names: Iterable[str]) -> str:
+    """Get the ID of a dataset without the parts that differ by experiment.
+
+    These are the experiment, the activity, and the version at the end.
+    """
+    parts = str(item.get("id", "")).split(".")[:-1]
+    differ = set()
+    for name in names:
+        values = item["properties"].get(name, [])
+        differ.update(values if isinstance(values, list) else [values])
+    return ".".join(p for p in parts if p not in differ)
+
+
+def _stac_ranges(
+    index: STACESGFIndex,
+    query: Query,
+    experiment: str,
+) -> list[tuple[str, str]]:
+    """Get the first and last date of the datasets on STAC.
+
+    The time ranges of the experiments of a dataset are joined.
+    """
     project = query.get("project", [""])[0]
     collection = _stac_collection(index.url, project)
     if collection is None:
         return []
     fields = ("start_datetime", "end_datetime", "frequency")
     names = [_stac_name(collection, project, f) for f in fields]
+    differ = [
+        _stac_name(collection, project, f) for f in (experiment, "activity_id")
+    ]
     # Some indices ignore the filter of the items of a collection, but not
     # that of a search.
     response = index.session.get(
@@ -462,30 +504,41 @@ def _stac_ranges(index: STACESGFIndex, query: Query) -> list[tuple[str, str]]:
         params={
             "collections": collection.url.rsplit("/", 1)[-1],
             "limit": _MAX_DATASETS,
-            "fields": ",".join(f"properties.{n}" for n in names),
+            "fields": ",".join(
+                ["id", *(f"properties.{n}" for n in [*names, *differ])],
+            ),
             **_stac_filter(collection, project, query),
         },
         timeout=TIMEOUT,
     )
     response.raise_for_status()
-    ranges = []
+    datasets: dict[str, list[tuple[str, str]]] = {}
     for item in response.json()["features"]:
         start, end, frequency = (item["properties"].get(n) for n in names)
-        if start and end:
-            found = timerange.from_iso(start, end, frequency)
-            ranges.extend([] if found is None else [found])
-    return ranges
+        found = (
+            timerange.from_iso(start, end, frequency)
+            if start and end
+            else None
+        )
+        if found is not None:
+            datasets.setdefault(_dataset_key(item, differ), []).append(found)
+    return [r for r in map(_join, datasets.values()) if r is not None]
 
 
 def _index_ranges(
     index: SolrESGFIndex | STACESGFIndex,
     query: Query,
+    experiment: str,
 ) -> list[tuple[str, str]]:
-    """Get the first and last date of datasets on an index."""
+    """Get the first and last date of datasets on an index.
+
+    The time ranges of the experiments of a dataset are joined, like
+    ESMValCore joins the data of a list of experiments.
+    """
     try:
         if isinstance(index, SolrESGFIndex):
-            return _solr_ranges(index, query)
-        return _stac_ranges(index, query)
+            return _solr_ranges(index, query, experiment)
+        return _stac_ranges(index, query, experiment)
     except _ERRORS as exc:
         logger.warning("Failed to get the dates from %s: %s", index, exc)
         return []
@@ -508,11 +561,10 @@ def _time_values(
         query = mapping.query({**facets, "project": project}, facet)
         # Datasets of different experiments cover different time ranges and
         # there may be too many of them to get all of their dates.
-        if _EXPERIMENT in mapping.facets and (
-            mapping.facets[_EXPERIMENT] not in query
-        ):
+        experiment = mapping.facets.get(_EXPERIMENT, "")
+        if experiment and experiment not in query:
             return []
-        return _index_ranges(index, query)
+        return _index_ranges(index, query, experiment)
 
     with ThreadPoolExecutor(max_workers=len(indices)) as pool:
         ranges = [r for found in pool.map(search, indices) for r in found]
