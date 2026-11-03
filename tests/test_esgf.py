@@ -530,6 +530,18 @@ def test_stac_time_values_of_experiments(stac_dates: _Session) -> None:
                     "mon",
                     dataset("CMIP", "historical", "r2i1p1f1"),
                 ),
+                _item(
+                    "1850-01-16T12:00:00Z",
+                    "2014-12-16T12:00:00Z",
+                    "mon",
+                    dataset("CMIP", "historical", "r3i1p1f1"),
+                ),
+                _item(
+                    "2016-01-16T12:00:00Z",
+                    "2100-12-16T12:00:00Z",
+                    "mon",
+                    dataset("ScenarioMIP", "ssp585", "r3i1p1f1"),
+                ),
             ],
         },
     )
@@ -538,7 +550,28 @@ def test_stac_time_values_of_experiments(stac_dates: _Session) -> None:
         "*",
         "1850/2014",
         "1850/2100",
+        "2016/2100",
     ]
+
+
+@pytest.mark.parametrize(
+    ("ranges", "expected"),
+    [
+        ([], []),
+        ([("1850", "2014"), ("2015", "2100")], [("1850", "2100")]),
+        ([("185001", "201412"), ("201406", "210012")], [("185001", "210012")]),
+        ([("1850", "2100"), ("1900", "1950")], [("1850", "2100")]),
+        (
+            [("2016", "2100"), ("1850", "2014")],
+            [("1850", "2014"), ("2016", "2100")],
+        ),
+    ],
+)
+def test_join(
+    ranges: list[tuple[str, str]],
+    expected: list[tuple[str, str]],
+) -> None:
+    assert esgf._join(ranges) == expected
 
 
 def test_solr_time_values_of_experiments(

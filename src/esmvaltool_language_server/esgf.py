@@ -434,12 +434,20 @@ def _time_indices(project: str) -> list[SolrESGFIndex | STACESGFIndex]:
     ]
 
 
-def _join(ranges: Iterable[tuple[str, str]]) -> tuple[str, str] | None:
-    """Join the time ranges of the experiments of a dataset."""
-    ranges = list(ranges)
-    if not ranges:
-        return None
-    return min(s for s, _ in ranges), max(e for _, e in ranges)
+def _join(ranges: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Join the time ranges of the experiments of a dataset.
+
+    Like the check of the data availability of ESMValCore, years without
+    data are gaps, so time ranges are only joined if there is no year
+    between them, and a time range is suggested for each part.
+    """
+    joined: list[tuple[str, str]] = []
+    for start, end in sorted(ranges):
+        if joined and int(start[:4]) <= int(joined[-1][1][:4]) + 1:
+            joined[-1] = (joined[-1][0], max(joined[-1][1], end))
+        else:
+            joined.append((start, end))
+    return joined
 
 
 def _solr_ranges(
@@ -462,8 +470,7 @@ def _solr_ranges(
     queries = [
         {**query, experiment: [exp]} for exp in query.get(experiment, [])
     ] or [query]
-    found = _join(r for q in queries if (r := most_common(q)) is not None)
-    return [] if found is None else [found]
+    return _join(r for q in queries if (r := most_common(q)) is not None)
 
 
 def _dataset_key(item: dict[str, Any], names: Iterable[str]) -> str:
@@ -522,7 +529,7 @@ def _stac_ranges(
         )
         if found is not None:
             datasets.setdefault(_dataset_key(item, differ), []).append(found)
-    return [r for r in map(_join, datasets.values()) if r is not None]
+    return [r for found in datasets.values() for r in _join(found)]
 
 
 def _index_ranges(
