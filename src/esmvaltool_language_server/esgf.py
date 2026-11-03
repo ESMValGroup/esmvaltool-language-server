@@ -61,6 +61,9 @@ _VERSION_PREFIX = "v"
 # The fields of the first and last date of a dataset on Solr indices.
 _SOLR_DATES = ("datetime_start", "datetime_stop")
 
+# Projects that are not published on the Solr indices.
+_NOT_ON_SOLR = frozenset({"CMIP7", "CORDEX-CMIP6"})
+
 
 @dataclasses.dataclass(frozen=True)
 class _Mapping:
@@ -120,7 +123,7 @@ def intake_esgf_mapping(project: str) -> _Mapping | None:
 
 
 def _solr_mapping(project: str) -> _Mapping | None:
-    if project not in FACETS:
+    if project not in FACETS or project in _NOT_ON_SOLR:
         return None
     return _Mapping(
         {"project": "project", **FACETS[project], "version": "version"},

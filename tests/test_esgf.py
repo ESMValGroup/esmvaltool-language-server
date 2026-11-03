@@ -115,6 +115,11 @@ def test_unknown_project_mapping() -> None:
     assert esgf._solr_mapping("OBS6") is None
 
 
+@pytest.mark.parametrize("project", ["CMIP7", "CORDEX-CMIP6"])
+def test_project_not_on_solr(project: str) -> None:
+    assert esgf._solr_mapping(project) is None
+
+
 def test_solr_mapping() -> None:
     mapping = esgf._solr_mapping("CMIP6")
     assert mapping is not None
@@ -375,7 +380,11 @@ def test_time_values_not_found(
     assert not solr_dates
 
 
-def test_time_values_unknown_project(solr_dates: list[esgf.Query]) -> None:
-    assert not esgf.is_searchable("OBS6", "timerange")
-    assert esgf.facet_values("OBS6", {}, "timerange") == []
+@pytest.mark.parametrize("project", ["OBS6", "CMIP7"])
+def test_time_values_unknown_project(
+    project: str,
+    solr_dates: list[esgf.Query],
+) -> None:
+    assert not esgf.is_searchable(project, "timerange")
+    assert esgf.facet_values(project, {}, "timerange") == []
     assert not solr_dates
