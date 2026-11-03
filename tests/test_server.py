@@ -241,7 +241,7 @@ async def test_other_files_have_no_features() -> None:
         types.CompletionParams(text_document=document, position=position),
     )
     assert result.items == []
-    hover = server.hover_(
+    hover = await server.hover_(
         ls,
         types.HoverParams(text_document=document, position=position),
     )

@@ -55,10 +55,10 @@ fallback_version = "0.1.0.dev0"
 addopts = [
     "--import-mode=importlib",
 ]
-testpaths = ["tests"]
 markers = [
-    "online: tests that download from the internet, deselect with '-m \"not online\"'",
+    "network: tests that need internet access, deselect with '-m \"not network\"'",
 ]
+testpaths = ["tests"]
 
 [tool.coverage.run]
 branch = true
