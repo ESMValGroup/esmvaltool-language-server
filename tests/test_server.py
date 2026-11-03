@@ -349,3 +349,61 @@ async def test_populate_datasets_progress(
         types.WorkDoneProgressBegin,
         types.WorkDoneProgressEnd,
     ]
+
+
+def test_check_document_ignores_other_files() -> None:
+    _, diagnostics = server._check_document("package:\n  name: example\n")
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_other_files_have_no_features() -> None:
+    ls = server.RecipeLanguageServer()
+    ls.protocol._workspace = Workspace(None)
+    ls.protocol.client_capabilities = types.ClientCapabilities()
+    uri = "file:///recipe.yaml"
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri=uri,
+            language_id="yaml",
+            version=1,
+            text="package:\n  name: example\nabout:\n  \n",
+        ),
+    )
+    document = types.TextDocumentIdentifier(uri=uri)
+    position = types.Position(line=3, character=2)
+    result = await server.completion(
+        ls,
+        types.CompletionParams(text_document=document, position=position),
+    )
+    assert result.items == []
+    hover = await server.hover_(
+        ls,
+        types.HoverParams(text_document=document, position=position),
+    )
+    assert hover is None
+    location = server.definition_(
+        ls,
+        types.DefinitionParams(text_document=document, position=position),
+    )
+    assert location is None
+
+
+def test_other_files_have_no_populate_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    monkeypatch.setattr(server, "is_recipe", lambda *_: False)
+    document = types.TextDocumentIdentifier(uri="file:///recipe_test.yml")
+    lenses = server.code_lens(ls, types.CodeLensParams(text_document=document))
+    assert lenses == []
+    position = types.Position(line=2, character=0)
+    actions = server.code_action(
+        ls,
+        types.CodeActionParams(
+            text_document=document,
+            range=types.Range(start=position, end=position),
+            context=types.CodeActionContext(diagnostics=[]),
+        ),
+    )
+    assert actions == []

@@ -178,6 +178,20 @@ describe("ESMValTool extension", () => {
     assert.equal(texts.length, 1);
   });
 
+  it("does not use the schema for other files named like recipes", async () => {
+    const extension = vscode.extensions.getExtension<{
+      isRecipe(resource: string): boolean;
+    }>("ESMValGroup.esmvaltool");
+    assert.ok(extension);
+    const folder = vscode.workspace.workspaceFolders?.[0];
+    assert.ok(folder);
+    const other = await vscode.workspace.openTextDocument(
+      vscode.Uri.joinPath(folder.uri, "conda", "recipe.yaml"),
+    );
+    assert.equal(extension.exports.isRecipe(other.uri.toString()), false);
+    assert.equal(extension.exports.isRecipe(document.uri.toString()), true);
+  });
+
   it("falls back to the schema without the language server", async () => {
     const extension = vscode.extensions.getExtension<{ mode: string }>(
       "ESMValGroup.esmvaltool",
