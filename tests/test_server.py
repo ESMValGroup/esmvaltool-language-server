@@ -215,6 +215,44 @@ async def test_completion_without_facet_search() -> None:
     assert not result.is_incomplete
 
 
+def test_check_document_ignores_other_files() -> None:
+    _, diagnostics = server._check_document("package:\n  name: example\n")
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_other_files_have_no_features() -> None:
+    ls = server.RecipeLanguageServer()
+    ls.protocol._workspace = Workspace(None)
+    ls.protocol.client_capabilities = types.ClientCapabilities()
+    uri = "file:///recipe.yaml"
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri=uri,
+            language_id="yaml",
+            version=1,
+            text="package:\n  name: example\nabout:\n  \n",
+        ),
+    )
+    document = types.TextDocumentIdentifier(uri=uri)
+    position = types.Position(line=3, character=2)
+    result = await server.completion(
+        ls,
+        types.CompletionParams(text_document=document, position=position),
+    )
+    assert result.items == []
+    hover = await server.hover_(
+        ls,
+        types.HoverParams(text_document=document, position=position),
+    )
+    assert hover is None
+    location = server.definition_(
+        ls,
+        types.DefinitionParams(text_document=document, position=position),
+    )
+    assert location is None
+
+
 @pytest.mark.asyncio
 async def test_formatting(tmp_path: Path) -> None:
     published: asyncio.Queue[types.PublishDiagnosticsParams] = asyncio.Queue()
@@ -240,18 +278,20 @@ async def test_formatting(tmp_path: Path) -> None:
 
         # The emoji is one character, but two UTF-16 code units, which the
         # client counts.
-        edits = await format_('a: {c: "🌍", b: 1}')
+        edits = await format_('documentation: {title: "🌍", description: x}')
         assert list(edits or []) == [
             types.TextEdit(
                 range=types.Range(
                     start=types.Position(line=0, character=0),
-                    end=types.Position(line=0, character=18),
+                    end=types.Position(line=0, character=44),
                 ),
-                new_text="a:\n  c: 🌍\n  b: 1\n",
+                new_text="documentation:\n  title: 🌍\n  description: x\n",
             ),
         ]
-        assert await format_("a: [\n") is None
+        assert await format_("documentation: [\n") is None
         assert not messages
-        assert await format_("a: 1  # Comment\n") is None
+        assert await format_("documentation: {}  # Comment\n") is None
         assert len(messages) == 1
         assert "comments" in messages[0].message
+        assert await format_("package: {name: example}\n") is None
+        assert len(messages) == 1

@@ -125,15 +125,75 @@ def scripts_directory() -> FilePath | None:
 @functools.cache
 def tags() -> dict[str, object]:
     """Load the tags defined in ``config-references.yml`` of ESMValTool."""
-    package = esmvaltool_directory()
-    if package is None:
+    path = _config_references_file()
+    if path is None:
         return {}
-    path = package / "config-references.yml"
     try:
         content = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError):
         return {}
     return content if isinstance(content, dict) else {}
+
+
+def _config_references_file() -> FilePath | None:
+    package = esmvaltool_directory()
+    return None if package is None else package / "config-references.yml"
+
+
+def _bibtex_file(name: str) -> FilePath | None:
+    package = esmvaltool_directory()
+    if package is None:
+        return None
+    return package / "references" / f"{name}.bibtex"
+
+
+@functools.cache
+def _tag_lines() -> dict[str, dict[str, int]]:
+    """Find the line of each tag in ``config-references.yml``."""
+    path = _config_references_file()
+    if path is None:
+        return {}
+    try:
+        root = yaml.compose(path.read_text(encoding="utf-8"), yaml.SafeLoader)
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(root, yaml.MappingNode):
+        return {}
+    return {
+        str(section.value): {
+            str(key.value): key.start_mark.line
+            for key, _ in tags_node.value
+            if isinstance(key, yaml.ScalarNode)
+        }
+        for section, tags_node in root.value
+        if isinstance(section, yaml.ScalarNode)
+        and isinstance(tags_node, yaml.MappingNode)
+    }
+
+
+def tag_location(section: str, name: str) -> tuple[FilePath, int] | None:
+    """Find where a tag is defined, as a file and a line number from 0.
+
+    Parameters
+    ----------
+    section:
+        The section of the tag, e.g. ``authors`` or ``references``.
+    name:
+        The name of the tag.
+
+    Returns
+    -------
+    :
+        The bibtex file of a reference, or the line in
+        ``config-references.yml`` where another tag is defined, or
+        :obj:`None` if the tag is not defined.
+    """
+    if section == "references":
+        path = _bibtex_file(name)
+        return None if path is None or not path.is_file() else (path, 0)
+    path = _config_references_file()
+    line = _tag_lines().get(section, {}).get(name)
+    return None if path is None or line is None else (path, line)
 
 
 def tag_value(section: str, name: str) -> object:
@@ -142,10 +202,9 @@ def tag_value(section: str, name: str) -> object:
     For references, this is the content of their bibtex file.
     """
     if section == "references":
-        package = esmvaltool_directory()
-        if package is None:
+        path = _bibtex_file(name)
+        if path is None:
             return None
-        path = package / "references" / f"{name}.bibtex"
         try:
             return path.read_text(encoding="utf-8").strip()
         except OSError:
