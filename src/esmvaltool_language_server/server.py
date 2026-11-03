@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 from esmvaltool_language_server import __version__, references
 from esmvaltool_language_server.completion import Options, completions
 from esmvaltool_language_server.definition import definition
+from esmvaltool_language_server.detection import is_recipe
 from esmvaltool_language_server.diagnostics import check_recipe
 from esmvaltool_language_server.errata import ErrataService, errata_diagnostics
 from esmvaltool_language_server.hover import hover
@@ -72,7 +73,7 @@ class RecipeLanguageServer(LanguageServer):
         try:
             recipe, diagnostics = await loop.run_in_executor(
                 None,
-                check_recipe,
+                _check_document,
                 document.source,
             )
         except Exception:
@@ -142,7 +143,22 @@ class RecipeLanguageServer(LanguageServer):
         self._publish(document, lines, version, [*diagnostics, *errata])
 
 
+def _check_document(text: str) -> tuple[object, list[types.Diagnostic]]:
+    """Check a document, unless it is not a recipe."""
+    if not is_recipe(text, recipe_schema()):
+        return MISSING, []
+    return check_recipe(text)
+
+
 server = RecipeLanguageServer()
+
+
+def _recipe_document(
+    ls: RecipeLanguageServer, uri: str
+) -> TextDocument | None:
+    """Get a document, or None if it is not a recipe."""
+    document = ls.workspace.get_text_document(uri)
+    return document if is_recipe(document.source, recipe_schema()) else None
 
 
 def _position(
@@ -232,7 +248,9 @@ async def completion(
 ) -> types.CompletionList:
     """Suggest keys and values."""
     uri = params.text_document.uri
-    document = ls.workspace.get_text_document(uri)
+    document = _recipe_document(ls, uri)
+    if document is None:
+        return types.CompletionList(is_incomplete=False, items=[])
     codec = document.position_codec
     pending: list[Future[list[str]]] = []
 
@@ -289,15 +307,20 @@ def _supports_snippets(capabilities: types.ClientCapabilities) -> bool:
 
 
 @server.feature(types.TEXT_DOCUMENT_HOVER)
-def hover_(
+async def hover_(
     ls: RecipeLanguageServer,
     params: types.HoverParams,
 ) -> types.Hover | None:
     """Show the documentation of a key or a preprocessor."""
     uri = params.text_document.uri
-    document = ls.workspace.get_text_document(uri)
+    document = _recipe_document(ls, uri)
+    if document is None:
+        return None
     codec = document.position_codec
-    result = hover(
+    # Describing a value may download documentation, so do not block the
+    # server.
+    result = await asyncio.to_thread(
+        hover,
         document.source,
         _position(document, params.position),
         ls.recipes.get(uri, MISSING),
@@ -318,7 +341,9 @@ def definition_(
 ) -> types.Location | None:
     """Go to the definition of a preprocessor, task, or diagnostic script."""
     uri = params.text_document.uri
-    document = ls.workspace.get_text_document(uri)
+    document = _recipe_document(ls, uri)
+    if document is None:
+        return None
     codec = document.position_codec
     location = definition(
         document.source,

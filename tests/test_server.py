@@ -338,3 +338,61 @@ def test_initialization_option_turns_off_errata(
     )
     server.initialize(ls, params)
     assert ls.errata_enabled is enabled
+
+
+@pytest.mark.asyncio
+async def test_no_errata_for_other_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    release.set()
+    ls, published = _errata_server(monkeypatch, release)
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri="file:///recipe_test.yml",
+            language_id="yaml",
+            version=1,
+            text="package:\n  name: example\n",
+        ),
+    )
+    await ls._check("file:///recipe_test.yml", 0)
+    assert len(published) == 1
+    assert _ERRATUM not in published[0].diagnostics
+
+
+def test_check_document_ignores_other_files() -> None:
+    _, diagnostics = server._check_document("package:\n  name: example\n")
+    assert diagnostics == []
+
+
+@pytest.mark.asyncio
+async def test_other_files_have_no_features() -> None:
+    ls = server.RecipeLanguageServer()
+    ls.protocol._workspace = Workspace(None)
+    ls.protocol.client_capabilities = types.ClientCapabilities()
+    uri = "file:///recipe.yaml"
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri=uri,
+            language_id="yaml",
+            version=1,
+            text="package:\n  name: example\nabout:\n  \n",
+        ),
+    )
+    document = types.TextDocumentIdentifier(uri=uri)
+    position = types.Position(line=3, character=2)
+    result = await server.completion(
+        ls,
+        types.CompletionParams(text_document=document, position=position),
+    )
+    assert result.items == []
+    hover = await server.hover_(
+        ls,
+        types.HoverParams(text_document=document, position=position),
+    )
+    assert hover is None
+    location = server.definition_(
+        ls,
+        types.DefinitionParams(text_document=document, position=position),
+    )
+    assert location is None

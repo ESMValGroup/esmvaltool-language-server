@@ -9,7 +9,7 @@ import {
   ServerOptions,
 } from "vscode-languageclient/node";
 
-import { Mode, RECIPE_SELECTOR, SchemaFallback } from "./schema";
+import { isRecipe, Mode, RECIPE_SELECTOR, SchemaFallback } from "./schema";
 
 const SERVER_MODULE = "esmvaltool_language_server";
 
@@ -29,6 +29,8 @@ function enqueue(operation: () => Promise<void>): Promise<void> {
 /** The API of this extension, used by its tests. */
 export interface Api {
   readonly mode: Mode;
+  /** Check if a file is a recipe, for the schema. */
+  isRecipe(resource: string): boolean;
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<Api> {
@@ -57,6 +59,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
     get mode() {
       return schemaFallback.mode;
     },
+    isRecipe,
   };
 }
 

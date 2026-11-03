@@ -39,9 +39,23 @@ authors and references it defines.
   The values are remembered for 10 minutes.
 - Documentation of preprocessor functions and other keys, their values, and
   preprocessors, with default values, when you hover over them.
-  If ESMValTool is installed, hovering over an author, project, theme, or
-  realm shows its definition in `config-references.yml`, and hovering over
-  a reference shows its bibtex entry.
+  Hovering over the value of a facet, such as `dataset`, `exp`,
+  `activity`, `institute`, `grid`, or `ensemble`, shows its description
+  in the controlled vocabulary of the project, for example CMIP6 or CMIP7,
+  that is included in the CMOR tables that ESMValCore uses.
+  CMIP7 models are described by, and linked to, their
+  [Essential Model Documentation](https://wcrp-cmip.github.io/Essential-Model-Documentation/),
+  which is downloaded when you hover over them.
+  Hovering over the value of the `project` facet, such as `CMIP6`, links
+  to the website of the project, or for projects without a website, such as
+  `OBS6`, `native6`, or `ICON`, to the ESMValTool or ESMValCore
+  documentation.
+  If ESMValTool is installed, hovering over an author shows their name and
+  institute, with links to their ORCID and GitHub profile, hovering over a
+  project, theme, or realm shows its definition in `config-references.yml`,
+  and hovering over a reference shows its first author, year, and title,
+  with a link to its DOI.
+  If the bibtex file of a reference cannot be read, its content is shown.
   The server reads `config-references.yml` and the list of bibtex files only
   once, so restart it after changing that file or adding a bibtex file.
   In Visual Studio Code, press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>
@@ -67,6 +81,15 @@ authors and references it defines.
   Studio Code, or with the initialization option `errata` in other editors.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
   or of a diagnostic script.
+  If ESMValTool is installed, go to the definition of an author, project,
+  theme, or realm in `config-references.yml`, or open the bibtex file of a
+  reference.
+
+Other tools also use files named like recipes, for example `recipe.yaml` of
+conda-forge.
+The server ignores files that are not ESMValTool recipes: files with
+top-level keys, none of which is `documentation`, `datasets`,
+`preprocessors`, or `diagnostics`.
 
 Planned: running a recipe from the editor.
 
@@ -159,6 +182,7 @@ copy instead, see the comment in `pyproject.toml`.
 ```bash
 pixi run test                      # run the tests and measure coverage
 pixi run -e py312 test             # run the tests with the oldest Python
+pixi run test -m "not network"     # run the tests without internet access
 pixi run test-vscode               # run the extension and server in VSCode
 pixi run pre-commit install        # check the code before each commit
 pixi run pre-commit run -a         # check all code now
@@ -176,6 +200,16 @@ npm run lint                       # check the code with ESLint
 npm run format                     # format the code with Prettier
 npm run package                    # build a package that can be installed
 ```
+
+The tests marked `network` need internet access.
+They check the Essential Model Documentation of CMIP7 models and the links in
+the recipe schema and in the documentation shown when hovering over tags,
+references, and facets.
+Links to the latest documentation of ESMValCore and ESMValTool are checked
+against the documentation of the development versions that the server is
+developed with; to use other documentation, set `ESMVALCORE_DOCS` or
+`ESMVALTOOL_DOCS` to its URL or to a local build directory, for example
+`ESMVALCORE_DOCS=../esmvalcore/doc/build/html/ pixi run pytest tests/test_links.py`.
 
 `pixi run test-vscode` downloads VSCode, starts it with the extension, and
 checks that the problems, completion, hover, and go to definition work.

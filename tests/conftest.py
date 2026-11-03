@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import os
 import warnings
 from functools import lru_cache
 from typing import TYPE_CHECKING
@@ -14,6 +15,36 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 CURSOR = "|"
+
+# The documentation of the development versions of ESMValCore and ESMValTool
+# that the language server is developed with.
+# TODO: use the latest documentation once ESMValCore#3261 and ESMValTool#4638
+# have been merged.
+ESMVALCORE_DOCS = "https://esmvalcore--3261.org.readthedocs.build/en/3261/"
+ESMVALTOOL_DOCS = "https://esmvaltool--4638.org.readthedocs.build/en/4638/"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Add options to choose what links are checked against."""
+    group = parser.getgroup("links", "checking links (pixi run test-links)")
+    group.addoption(
+        "--esmvalcore-docs",
+        default=os.environ.get("ESMVALCORE_DOCS", ESMVALCORE_DOCS),
+        help=(
+            "URL or local build directory of the ESMValCore documentation "
+            "to check links to the latest documentation against. "
+            "Default: $ESMVALCORE_DOCS or %(default)s."
+        ),
+    )
+    group.addoption(
+        "--esmvaltool-docs",
+        default=os.environ.get("ESMVALTOOL_DOCS", ESMVALTOOL_DOCS),
+        help=(
+            "URL or local build directory of the ESMValTool documentation "
+            "to check links to the latest documentation against. "
+            "Default: $ESMVALTOOL_DOCS or %(default)s."
+        ),
+    )
 
 
 @lru_cache

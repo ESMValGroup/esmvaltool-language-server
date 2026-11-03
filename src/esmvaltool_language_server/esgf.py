@@ -101,7 +101,7 @@ def _intake_esgf_configuration() -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))["projects"]
 
 
-def _intake_esgf_mapping(project: str) -> _Mapping | None:
+def intake_esgf_mapping(project: str) -> _Mapping | None:
     """Get the mapping of the configured or default intake-esgf data source."""
     for settings in (CFG["projects"], _intake_esgf_configuration()):
         for source in settings.get(project, {}).get("data", {}).values():
@@ -129,7 +129,7 @@ def intake_esgf_facets(project: str) -> set[str]:
         The facets in the configured or the default configuration of the
         data source. Empty if there is none.
     """
-    mapping = _intake_esgf_mapping(project)
+    mapping = intake_esgf_mapping(project)
     return set() if mapping is None else set(mapping.facets)
 
 
@@ -145,7 +145,7 @@ def _solr_mapping(project: str) -> _Mapping | None:
 def _mapping(index: Index, project: str) -> _Mapping | None:
     if isinstance(index, SolrESGFIndex):
         return _solr_mapping(project)
-    return _intake_esgf_mapping(project)
+    return intake_esgf_mapping(project)
 
 
 @functools.cache
