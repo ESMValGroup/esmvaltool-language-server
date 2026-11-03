@@ -11,7 +11,8 @@ Solr indices. The version is not part of these mappings, ESMValCore adds the
 prefix "v" to the version of a dataset on ESGF.
 The time range of the datasets is found from the most common first and last
 date of the matching datasets on Solr indices, and from the first and last
-date of up to 100 matching datasets on STAC indices.
+date of up to 100 matching datasets on STAC indices, once the experiment
+is known.
 """
 
 from __future__ import annotations
@@ -65,6 +66,10 @@ _VERSION_PREFIX = "v"
 
 # The fields of the first and last date of a dataset on Solr indices.
 _SOLR_DATES = ("datetime_start", "datetime_stop")
+
+# The facet of the experiment. The time range of the datasets on ESGF is only
+# found if the experiment is known.
+_EXPERIMENT = "exp"
 
 # Projects that are not published on the Solr indices.
 _NOT_ON_SOLR = frozenset({"CMIP7", "CORDEX-CMIP6"})
@@ -501,6 +506,12 @@ def _time_values(
         if mapping is None:
             return []
         query = mapping.query({**facets, "project": project}, facet)
+        # Datasets of different experiments cover different time ranges and
+        # there may be too many of them to get all of their dates.
+        if _EXPERIMENT in mapping.facets and (
+            mapping.facets[_EXPERIMENT] not in query
+        ):
+            return []
         return _index_ranges(index, query)
 
     with ThreadPoolExecutor(max_workers=len(indices)) as pool:

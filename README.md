@@ -38,7 +38,7 @@ authors and references it defines.
   completed from the dates of the files in the other data sources, from the
   most common first and last date of the datasets on the Solr indices of
   ESGF, and from the first and last date of up to 100 datasets on the STAC
-  indices of ESGF.
+  indices of ESGF, once the experiment is given.
   Dates are given with the month for monthly data and with the day for daily
   and sub-daily data, and in years if the data covers whole years.
   Finding the values usually takes less than a second; until then, the values

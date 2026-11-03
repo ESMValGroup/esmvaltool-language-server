@@ -376,7 +376,7 @@ def test_time_values_not_found(
     solr_dates: list[esgf.Query],
 ) -> None:
     monkeypatch.setattr(esgf, "_index_values", lambda *_: {})
-    assert esgf.facet_values("CMIP6", {}, "timerange") == []
+    assert esgf.facet_values("CMIP6", {"exp": "historical"}, "timerange") == []
     assert not solr_dates
 
 
@@ -409,7 +409,8 @@ def stac_dates(
     queryables = stac_session.responses[
         "https://stac/collections/CMIP6/queryables"
     ]
-    queryables.data["properties"]["cmip6:frequency"] = {}  # type: ignore[index]
+    properties = queryables.data["properties"]  # type: ignore[index]
+    properties["cmip6:experiment_id"] = properties["cmip6:frequency"] = {}
     stac_session.responses["https://stac/search"] = _Response(
         {
             "features": [
@@ -438,7 +439,12 @@ def test_stac_time_values(
     facet: str,
     expected: list[str],
 ) -> None:
-    facets = {"dataset": "CESM2", "short_name": "tas", "timerange": "*"}
+    facets = {
+        "dataset": "CESM2",
+        "exp": "historical",
+        "short_name": "tas",
+        "timerange": "*",
+    }
     assert esgf.is_searchable("CMIP6", facet)
     assert esgf.facet_values("CMIP6", facets, facet) == expected
     params = stac_dates.params[-1]
@@ -449,6 +455,7 @@ def test_stac_time_values(
     )
     assert params["filter"] == (
         "\"cmip6:source_id\" IN ('CESM2') AND "
+        "\"cmip6:experiment_id\" IN ('historical') AND "
         "\"cmip6:variable_id\" IN ('tas') AND latest=true"
     )
 
@@ -458,10 +465,28 @@ def test_stac_time_values_error(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     stac_dates.responses["https://stac/search"] = _Response("error", 500)
-    assert esgf.facet_values("CMIP6", {}, "timerange") == []
+    facets = {"exp": "historical"}
+    assert esgf.facet_values("CMIP6", facets, "timerange") == []
     assert "Failed to get the dates from STACESGFIndex('stac')" in caplog.text
 
 
 def test_stac_time_values_unknown_project(stac_dates: _Session) -> None:
     assert esgf.facet_values("CMIP5", {}, "timerange") == []
     assert not esgf.is_searchable("OBS6", "timerange")
+
+
+@pytest.mark.parametrize("exp", [None, "hist*"])
+def test_stac_time_values_without_experiment(
+    stac_dates: _Session,
+    exp: str | None,
+) -> None:
+    facets = {"dataset": "CESM2", "exp": exp}
+    assert esgf.facet_values("CMIP6", facets, "timerange") == []
+    assert not stac_dates.params
+
+
+def test_solr_time_values_without_experiment(
+    solr_dates: list[esgf.Query],
+) -> None:
+    assert esgf.facet_values("CMIP6", {"dataset": "CESM2"}, "timerange") == []
+    assert not solr_dates
