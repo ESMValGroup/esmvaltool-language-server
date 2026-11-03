@@ -28,6 +28,7 @@ dependencies = [
     "esmvalcore>=2.16.0.dev0",
     "globus-sdk",
     "intake-esgf",
+    "pybtex",
     "pygls>=2.0",
     "pyyaml",
     "requests",
@@ -53,6 +54,9 @@ fallback_version = "0.1.0.dev0"
 [tool.pytest.ini_options]
 addopts = [
     "--import-mode=importlib",
+]
+markers = [
+    "network: tests that need internet access, deselect with '-m \"not network\"'",
 ]
 testpaths = ["tests"]
 
@@ -171,6 +175,7 @@ pyrefly = "*"
 pytest = "*"
 pytest-asyncio = "*"
 pytest-cov = "*"
+pytest-mock = "*"
 ruff = "*"
 types-jsonschema = "*"
 types-pyyaml = "*"

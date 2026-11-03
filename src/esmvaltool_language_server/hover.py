@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from lsprotocol import types
 
-from esmvaltool_language_server import cmor, references
+from esmvaltool_language_server import cmor, references, tags, vocabulary
 from esmvaltool_language_server.completion import preprocessor_documentation
 from esmvaltool_language_server.context import context_at
 from esmvaltool_language_server.schema import MISSING, RecipeSchema, data_at
@@ -92,17 +92,20 @@ def _value_documentation(
     recipe: object,
     schema: RecipeSchema,
 ) -> str | None:
-    """Describe a value by the documentation of its key."""
+    """Describe a value by the documentation of its key.
+
+    The branding suffixes of variables are also described by the variable,
+    and the values of other facets by the controlled vocabulary.
+    """
     description = schema.documentation(schema.at(path, recipe))
     if description is None and path and isinstance(path[-1], int):
         # Items of lists are described by the list.
         description = schema.documentation(schema.at(path[:-1], recipe))
-    variable = cmor.branding_suffixes(path, recipe).get(value)
-    if variable is not None:
-        return (
-            variable if description is None else f"{description}\n\n{variable}"
-        )
-    return description
+    details = cmor.branding_suffixes(path, recipe).get(
+        value,
+    ) or vocabulary.facet_documentation(path, value, recipe)
+    parts = [part for part in (description, details) if part is not None]
+    return "\n\n".join(parts) if parts else None
 
 
 def _tag_documentation(path: Path, name: str) -> str | None:
@@ -114,9 +117,17 @@ def _tag_documentation(path: Path, name: str) -> str | None:
     if value is None:
         return None
     title = f"{_TAG_KINDS[section]} `{name}`"
-    if section == "references":
-        return f"{title}:\n\n```bibtex\n{value}\n```"
+    if section == "references" and isinstance(value, str):
+        return _reference_documentation(title, name, value)
     if isinstance(value, dict):
-        lines = [f"- {key}: {item}" for key, item in value.items() if item]
-        return "\n".join([f"{title}:", "", *lines])
+        # Only authors are defined by a mapping.
+        return f"{title}: {tags.author_summary(value)}"
     return f"{title}: {value}"
+
+
+def _reference_documentation(title: str, name: str, bibtex: str) -> str:
+    """Summarize a reference, or show its bibtex if it cannot be read."""
+    summary = tags.reference_summary(name, bibtex)
+    if summary is None:
+        return f"{title}:\n\n```bibtex\n{bibtex}\n```"
+    return f"{title}: {summary}"

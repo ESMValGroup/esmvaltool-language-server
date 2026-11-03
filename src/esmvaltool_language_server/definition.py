@@ -1,4 +1,4 @@
-"""Go to where a preprocessor, task, dataset, or script is defined."""
+"""Go to where a preprocessor, task, dataset, script, or tag is defined."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ from esmvaltool_language_server import references
 from esmvaltool_language_server.context import context_at
 
 if TYPE_CHECKING:
+    from pathlib import Path as FilePath
+
     from esmvaltool_language_server.context import Path
 
 
@@ -33,14 +35,17 @@ def definition(
     Returns
     -------
     :
-        The location of the preprocessor, the task, the dataset, or the
-        diagnostic script that the value refers to, or :obj:`None` if it is not found.
+        The location of the preprocessor, the task, the dataset, the
+        diagnostic script, or the tag (author, reference, ...) that the value
+        refers to, or :obj:`None` if it is not found.
     """
     context = context_at(text, position.line, position.character)
     if context is None or context.kind == "key" or not context.word:
         return None
     if references.is_script(context.path):
         return _script_location(context.word)
+    if (section := references.tag_section(context.path)) is not None:
+        return _tag_location(section, context.word)
     if references.is_preprocessor(context.path):
         targets: list[Path] = [("preprocessors", context.word)]
     elif references.is_ancestor(context.path):
@@ -69,9 +74,17 @@ def _load(text: str) -> object:
 
 def _script_location(name: str) -> types.Location | None:
     path = references.script_file(name)
-    if path is None:
-        return None
-    start = types.Position(line=0, character=0)
+    return None if path is None else _file_location(path, 0)
+
+
+def _tag_location(section: str, name: str) -> types.Location | None:
+    found = references.tag_location(section, name)
+    return None if found is None else _file_location(*found)
+
+
+def _file_location(path: FilePath, line: int) -> types.Location:
+    """Get the location of the start of a line in a file."""
+    start = types.Position(line=line, character=0)
     return types.Location(
         uri=path.as_uri(),
         range=types.Range(start=start, end=start),
