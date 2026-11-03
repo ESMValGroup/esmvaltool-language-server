@@ -60,7 +60,7 @@ def _index[T](cls: type[T], **attributes: object) -> T:
 
 
 def test_intake_esgf_mapping() -> None:
-    mapping = esgf._intake_esgf_mapping("CMIP5")
+    mapping = esgf.intake_esgf_mapping("CMIP5")
     assert mapping is not None
     query = mapping.query(
         {
@@ -92,7 +92,7 @@ def test_configured_intake_esgf_mapping(
     }
     projects = {"CMIP6": {"data": data}}
     monkeypatch.setattr(esgf, "CFG", {"projects": projects})
-    mapping = esgf._intake_esgf_mapping("CMIP6")
+    mapping = esgf.intake_esgf_mapping("CMIP6")
     assert mapping is not None
     assert mapping.query({"dataset": "CESM2"}, "exp") == {
         "source_id": ["CESM2"],
@@ -101,7 +101,7 @@ def test_configured_intake_esgf_mapping(
 
 @pytest.mark.parametrize(
     "mapping",
-    [esgf._intake_esgf_mapping("CMIP6"), esgf._solr_mapping("CMIP6")],
+    [esgf.intake_esgf_mapping("CMIP6"), esgf._solr_mapping("CMIP6")],
 )
 def test_version_mapping(mapping: esgf._Mapping | None) -> None:
     assert mapping is not None
@@ -111,7 +111,7 @@ def test_version_mapping(mapping: esgf._Mapping | None) -> None:
 
 
 def test_unknown_project_mapping() -> None:
-    assert esgf._intake_esgf_mapping("OBS6") is None
+    assert esgf.intake_esgf_mapping("OBS6") is None
     assert esgf._solr_mapping("OBS6") is None
 
 
