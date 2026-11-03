@@ -36,6 +36,32 @@ def test_suggestions(facet: str, expected: list[str]) -> None:
     assert timerange.suggestions(facet, RANGES) == expected
 
 
+@pytest.mark.parametrize(
+    ("start", "end", "expected"),
+    [
+        ("1850", "2014", "1850/2014"),
+        ("185001", "201412", "1850/2014"),
+        ("18500101", "20141231", "1850/2014"),
+        # A 360-day calendar.
+        ("18500101", "20141230", "1850/2014"),
+        ("185001010030", "201412312330", "1850/2014"),
+        ("185003", "201411", "185003/201411"),
+        ("19910601", "19921230", "199106/199212"),
+        ("19910601", "19920430", "199106/199204"),
+        ("19500101", "19500228", "195001/195002"),
+        ("19500101", "19520229", "195001/195202"),
+        ("19500115", "20141231", "19500115/20141231"),
+        ("19500101", "19500227", "19500101/19500227"),
+        ("19500101", "19501229", "19500101/19501229"),
+    ],
+)
+def test_suggestions_precision(start: str, end: str, expected: str) -> None:
+    assert timerange.suggestions("timerange", [(start, end)]) == [
+        "*",
+        expected,
+    ]
+
+
 def test_suggestions_without_ranges() -> None:
     assert timerange.suggestions("timerange", []) == []
 

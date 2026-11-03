@@ -42,7 +42,8 @@ authors and references it defines.
   The time ranges of a list of experiments are joined, like ESMValCore
   does, and time ranges with years without data are split, because
   ESMValCore stops if there is no data for a year.
-  Time ranges are given in years if the data covers whole years.
+  Time ranges are given in years or months if the data covers whole years
+  or months, and with the day otherwise.
   Finding the values usually takes less than a second; until then, the values
   that the recipe schema allows are suggested.
   The values are remembered for 10 minutes.
