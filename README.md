@@ -78,7 +78,9 @@ authors and references it defines.
   `M-x eglot-reconnect`.
 - Errata of the datasets in a recipe, from the
   [ESGF errata service](https://errata.esgf.io), shown on the line of the
-  dataset with a link to the description.
+  dataset with their status and a link to the description.
+  They are shown as information, to distinguish them from errors and warnings
+  about the recipe itself.
   Resolved errata are only shown for a dataset with an affected `version`.
   To find them, the project, name, and experiment of each dataset are sent to
   the service, which can take up to a minute for a recipe with many models.

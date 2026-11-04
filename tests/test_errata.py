@@ -306,11 +306,11 @@ def test_diagnostics_for_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
     service = _service(monkeypatch, session)
     found = _diagnostics(text, recipe, service)
     assert [d.message for d in found] == [
-        "Problem open",
-        "Problem closed",
+        "Problem open (on hold)",
+        "Problem closed (resolved)",
     ]
     assert [d.severity for d in found] == [
-        types.DiagnosticSeverity.Warning,
+        types.DiagnosticSeverity.Information,
         types.DiagnosticSeverity.Information,
     ]
     assert found[0].range.start.line == 1
@@ -372,7 +372,10 @@ def test_resolved_errata_need_a_version(
     )
     service = _service(monkeypatch, session)
     found = _diagnostics(text, recipe, service)
-    assert [d.message for d in found] == ["Problem wontfix", "Problem new"]
+    assert [d.message for d in found] == [
+        "Problem wontfix (won't fix)",
+        "Problem new (new)",
+    ]
 
 
 def test_resolved_erratum_needs_the_version_to_be_affected(
@@ -408,10 +411,10 @@ def test_errata_per_variable_group(monkeypatch: pytest.MonkeyPatch) -> None:
     service = _service(monkeypatch, session)
     found = _diagnostics(text, yaml.safe_load(text), service)
     assert [(d.range.start.line, d.message) for d in found] == [
-        (1, "Problem some (affects tas, ta)"),
-        (1, "Problem all"),
-        (9, "Problem some (affects tas, ta)"),
-        (9, "Problem all"),
+        (1, "Problem some (new, affects tas, ta)"),
+        (1, "Problem all (won't fix)"),
+        (9, "Problem some (new, affects tas, ta)"),
+        (9, "Problem all (won't fix)"),
     ]
 
 
@@ -505,8 +508,8 @@ def test_erratum_of_aliased_datasets_is_shown_once(
 @pytest.mark.parametrize(
     ("affected", "message"),
     [
-        (("tas", "pr", "ta"), "Problem u1"),
-        (("tas", "pr"), "Problem u1 (affects tas, pr)"),
+        (("tas", "pr", "ta"), "Problem u1 (new)"),
+        (("tas", "pr"), "Problem u1 (new, affects tas, pr)"),
     ],
 )
 def test_erratum_of_dataset_with_several_paths_is_merged(
@@ -722,10 +725,14 @@ def test_service_remembers_results_in_memory(
 @pytest.mark.parametrize(
     ("variable", "affected", "message"),
     [
-        pytest.param("rtnt", "rlut", "Problem u1", id="input of derived"),
-        pytest.param("rtnt", "rtnt", "Problem u1", id="derived on ESGF"),
+        pytest.param(
+            "rtnt", "rlut", "Problem u1 (new)", id="input of derived"
+        ),
+        pytest.param("rtnt", "rtnt", "Problem u1 (new)", id="derived on ESGF"),
         pytest.param("rtnt", "tos", None, id="unrelated variable"),
-        pytest.param("unknown", "tos", "Problem u1", id="cannot be derived"),
+        pytest.param(
+            "unknown", "tos", "Problem u1 (new)", id="cannot be derived"
+        ),
     ],
 )
 def test_errata_of_derived_variables(

@@ -62,8 +62,8 @@ _SOURCE_FACETS = ("source_id", "source")
 # facets that it lists for a project are used.
 _EXPERIMENT_FACETS = ("experiment_id", "experiment")
 
-# Errata of datasets that may still be affected.
-_OPEN = frozenset({"new", "onhold"})
+# How to show the status of an erratum, if it differs from its name.
+_STATUS_LABELS = {"onhold": "on hold", "wontfix": "won't fix"}
 
 # The prefix that ESMValCore adds to the version of a dataset on ESGF.
 _VERSION_PREFIX = "v"
@@ -491,9 +491,10 @@ def _node_at(root: yaml.Node, path: Path) -> yaml.Node:
 
 
 def _message(erratum: Erratum, variables: list[str] | None) -> str:
-    if variables is None:
-        return erratum.title
-    return f"{erratum.title} (affects {', '.join(dict.fromkeys(variables))})"
+    details = [_STATUS_LABELS.get(erratum.status, erratum.status)]
+    if variables is not None:
+        details.append(f"affects {', '.join(dict.fromkeys(variables))}")
+    return f"{erratum.title} ({', '.join(details)})"
 
 
 def _diagnostic(
@@ -510,9 +511,9 @@ def _diagnostic(
             end=types.Position(line=line, character=max(end, column)),
         ),
         message=_message(erratum, variables),
-        severity=types.DiagnosticSeverity.Warning
-        if erratum.status in _OPEN
-        else types.DiagnosticSeverity.Information,
+        # An erratum is not a problem with the recipe, so it should stand out
+        # from the errors and warnings that are.
+        severity=types.DiagnosticSeverity.Information,
         code="erratum",
         code_description=types.CodeDescription(href=erratum.url),
         source=SOURCE,
@@ -538,9 +539,8 @@ def errata_diagnostics(
     Yields
     ------
     :
-        After looking up the errata of each source, a diagnostic at the line
-        of each dataset with an erratum found so far, a warning if the erratum
-        is open and information otherwise.
+        After looking up the errata of each source, an information diagnostic
+        at the line of each dataset with an erratum found so far.
     """
     try:
         root = yaml.compose(text, Loader=yaml.SafeLoader)
