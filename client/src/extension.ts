@@ -15,6 +15,10 @@ const SERVER_MODULE = "esmvaltool_language_server";
 
 let client: LanguageClient | undefined;
 let fallback: SchemaFallback | undefined;
+// The language server can still log while it is shutting down, so its output
+// channel outlives the client: the client closes a channel that it created
+// itself when it stops and writing to a closed channel throws an error.
+let outputChannel: vscode.LogOutputChannel | undefined;
 
 // Starting the server takes a few seconds, so restarts can be requested
 // while one is still in progress. Starts and stops run one at a time, so
@@ -31,6 +35,8 @@ export interface Api {
   readonly mode: Mode;
   /** The errata option that was sent to the running language server. */
   readonly errataOption: boolean | undefined;
+  /** The channel that the running language server logs to. */
+  readonly outputChannel: vscode.LogOutputChannel | undefined;
   /** Check if a file is a recipe, for the schema. */
   isRecipe(resource: string): boolean;
 }
@@ -38,8 +44,12 @@ export interface Api {
 export async function activate(context: vscode.ExtensionContext): Promise<Api> {
   const schemaFallback = new SchemaFallback(context.globalStorageUri);
   fallback = schemaFallback;
+  outputChannel = vscode.window.createOutputChannel("ESMValTool", {
+    log: true,
+  });
   context.subscriptions.push(
     schemaFallback,
+    outputChannel,
     vscode.commands.registerCommand(
       "esmvaltool.restartLanguageServer",
       restart,
@@ -62,6 +72,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
       const options = client?.clientOptions.initializationOptions as
         { errata?: boolean } | undefined;
       return options?.errata;
+    },
+    get outputChannel() {
+      return client?.outputChannel;
     },
     get mode() {
       return schemaFallback.mode;
@@ -104,6 +117,7 @@ async function start(): Promise<void> {
   };
   const clientOptions: LanguageClientOptions = {
     documentSelector: [RECIPE_SELECTOR],
+    outputChannel,
     initializationOptions: {
       errata: vscode.workspace
         .getConfiguration("esmvaltool.languageServer")

@@ -4,8 +4,9 @@ The values are found with :meth:`esmvalcore.dataset.Dataset.from_files` in
 the data sources that are configured for a project, except those that search
 ESGF: the values on ESGF are found much faster by
 :mod:`esmvaltool_language_server.esgf`.
-The facets that can be searched for are the facets in the templates of the
-paths of the data sources, for example of
+The facets that can be searched for are the
+:attr:`~esmvalcore.io.protocol.DataSource.searchable_facets` of the data
+sources, for example the facets in the templates of the paths of
 :class:`esmvalcore.io.local.LocalDataSource`, and the facets that select the
 time range, from the time ranges of the files.
 """
@@ -13,7 +14,6 @@ time range, from the time ranges of the files.
 from __future__ import annotations
 
 import functools
-import re
 from typing import TYPE_CHECKING, cast
 
 from esmvalcore.config import CFG
@@ -35,12 +35,6 @@ _ESGF_DATA_SOURCES = frozenset(
         "esmvalcore.io.intake_esgf.IntakeESGFDataSource",
     },
 )
-
-# Attributes of data sources with templates of the paths of their data.
-_TEMPLATES = ("dirname_template", "filename_template")
-
-# A facet in a template, e.g. {dataset} or {dataset.lower}.
-_TAG = re.compile(r"{([^}.]+)(?:\.(?:lower|upper))?}")
 
 # Facets that :meth:`esmvalcore.dataset.Dataset.from_files` cannot find the
 # values of.
@@ -68,7 +62,7 @@ def _session(project: str) -> Session | None:
 
 @functools.cache
 def known_facets(project: str) -> frozenset[str]:
-    """Get the facets in the templates of the data sources of a project.
+    """Get the facets that the data sources of a project can search for.
 
     Parameters
     ----------
@@ -84,12 +78,13 @@ def known_facets(project: str) -> frozenset[str]:
     session = _session(project)
     if session is None:
         return frozenset()
-    return frozenset(
-        tag
-        for source in load_data_sources(session, project)
-        for name in _TEMPLATES
-        if isinstance(template := getattr(source, name, None), str)
-        for tag in _TAG.findall(template)
+    return frozenset().union(
+        *(
+            # Data sources without searchable facets are deprecated in
+            # ESMValCore v2.16.0.
+            getattr(source, "searchable_facets", frozenset())
+            for source in load_data_sources(session, project)
+        ),
     )
 
 
@@ -106,7 +101,7 @@ def is_searchable(project: str, facet: str) -> bool:
     Returns
     -------
     :
-        Whether the facet is in the templates of the data sources or selects
+        Whether a data source can search for the facet or the facet selects
         the time range of the data.
     """
     if facet in timerange.FACETS:
@@ -147,8 +142,8 @@ def _dataset(
         },
     )
     dataset.session = session
-    # Use any value for the facets in the templates that are not given and
-    # that ESMValCore does not add.
+    # Use any value for the searchable facets that are not given and that
+    # ESMValCore does not add.
     augmented = dataset.copy()
     augmented.augment_facets()
     for name in known_facets(project) - set(augmented.facets):

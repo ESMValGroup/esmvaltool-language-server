@@ -178,6 +178,19 @@ describe("ESMValTool extension", () => {
     assert.equal(texts.length, 1);
   });
 
+  it("accepts output from a language server that is stopping", async () => {
+    const extension = vscode.extensions.getExtension<{
+      outputChannel: vscode.LogOutputChannel | undefined;
+    }>("ESMValGroup.esmvaltool");
+    assert.ok(extension);
+    const channel = extension.exports.outputChannel;
+    assert.ok(channel);
+    await vscode.commands.executeCommand("esmvaltool.restartLanguageServer");
+    assert.doesNotThrow(() => {
+      channel.error("A late message from the previous language server");
+    });
+  });
+
   it("does not use the schema for other files named like recipes", async () => {
     const extension = vscode.extensions.getExtension<{
       isRecipe(resource: string): boolean;
