@@ -35,9 +35,13 @@ authors and references it defines.
   The facets of the other data sources that can be completed are those in
   the templates of their paths.
   The time range of the data, `timerange`, `start_year`, and `end_year`, is
-  completed from the dates of the files in the other data sources and of up
-  to 100 datasets on the STAC indices of ESGF, and from the most common first
-  and last year of the datasets on the Solr indices of ESGF.
+  completed from the dates of the files in the other data sources, from the
+  names of the files on the Globus indices of ESGF, from the dates of the
+  files of up to 100 datasets on the STAC indices of ESGF, and from the most
+  common first and last year of the datasets on the Solr indices of ESGF.
+  Globus indices also use these years if the dates cannot be read from the
+  names of the files, as in many CMIP3 files, or if there are more than 5000
+  files.
   The time ranges on ESGF are only suggested once the experiment is given.
   The time ranges of a list of experiments are joined, like ESMValCore
   does, and time ranges with years without data are split, because

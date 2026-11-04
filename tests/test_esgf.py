@@ -322,7 +322,7 @@ def test_index_values(
 @pytest.fixture
 def solr_dates(monkeypatch: pytest.MonkeyPatch) -> list[esgf.Query]:
     """Use a Solr index with the first and last dates of datasets."""
-    indices = [_index(GlobusESGFIndex), _index(SolrESGFIndex)]
+    indices = [_index(SolrESGFIndex)]
     monkeypatch.setattr(esgf, "_indices", lambda: indices)
     queries: list[esgf.Query] = []
     counts = {
@@ -589,3 +589,136 @@ def test_solr_time_values_of_experiments(
         "1850/2100",
     ]
     assert len(solr_dates) == 4
+
+
+class _GlobusFiles(_GlobusClient):
+    """Answer with the number of files with each name and the dataset dates."""
+
+    def __init__(
+        self,
+        names: dict[str, int],
+        dates: dict[str, dict[str, int]] | None = None,
+    ) -> None:
+        super().__init__({})
+        self.values = {"title": names, **(dates or {})}
+        self.requests: list[dict[str, Any]] = []
+
+    def post_search(self, _index_id: str, data: dict[str, Any]) -> object:
+        self.requests.append(data)
+        values = self.values.get(data["facets"][0]["field_name"], {})
+        buckets = [{"value": v, "count": c} for v, c in values.items()]
+        return {"facet_results": [{"buckets": buckets}]}
+
+
+def _use_globus(
+    monkeypatch: pytest.MonkeyPatch,
+    client: _GlobusClient,
+) -> None:
+    index = _index(
+        GlobusESGFIndex,
+        client=client,
+        index_id="id",
+        repr="globus",
+    )
+    monkeypatch.setattr(esgf, "_indices", lambda: [index])
+
+
+def test_globus_time_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    template = "tas_Amon_CESM2_{exp}_{member}_gn_{dates}.nc"
+    client = _GlobusFiles(
+        {
+            template.format(exp=exp, member=member, dates=dates): 2
+            for exp, member, dates in [
+                ("historical", "r1i1p1f1", "185001-194912"),
+                ("historical", "r1i1p1f1", "195001-201412"),
+                ("ssp585", "r1i1p1f1", "201501-210012"),
+                # This ensemble member has no data for the other experiment.
+                ("historical", "r2i1p1f1", "185001-201412"),
+            ]
+        },
+    )
+    _use_globus(monkeypatch, client)
+    facets = {
+        "dataset": "CESM2",
+        "exp": ["historical", "ssp585"],
+        "short_name": "tas",
+    }
+    assert esgf.is_searchable("CMIP6", "timerange")
+    assert esgf.facet_values("CMIP6", facets, "timerange") == [
+        "*",
+        "1850/2014",
+        "1850/2100",
+    ]
+    (request,) = client.requests
+    assert request["limit"] == 0
+    assert request["facets"][0]["size"] == esgf._MAX_FILE_NAMES
+    assert {
+        "type": "match_any",
+        "field_name": "type",
+        "values": ["File"],
+    } in request["filters"]
+
+
+def test_globus_time_values_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _GlobusFiles({})
+    _use_globus(monkeypatch, client)
+    assert esgf.facet_values("CMIP6", {"exp": "ssp585"}, "timerange") == []
+    assert len(client.requests) == 1
+
+
+_DATASET_DATES = {
+    "datetime_start": {"1850-01-16T12:00:00.000Z": 20},
+    # Datasets have one of the fields of the last date.
+    "datetime_end": {"2014-12-16T12:00:00.000Z": 8, "2014-11-06T00:00:00Z": 9},
+    "datetime_stop": {"2014-12-16T12:00:00.000Z": 12},
+}
+
+
+@pytest.mark.parametrize(
+    "names",
+    [
+        pytest.param(
+            {
+                "tas_A1_185001-201412.nc": 1,
+                "tas_A1.SRESA1B_1.CCSM.atmm.2000-01_cat_2099-12.nc": 1,
+            },
+            id="cannot be read",
+        ),
+        pytest.param(
+            {f"tas_{i}_185001-185012.nc": 1 for i in range(5000)},
+            id="too many",
+        ),
+    ],
+)
+def test_globus_time_values_from_datasets(
+    monkeypatch: pytest.MonkeyPatch,
+    names: dict[str, int],
+) -> None:
+    _use_globus(monkeypatch, _GlobusFiles(names, _DATASET_DATES))
+    facets = {"dataset": "CESM2", "exp": "historical"}
+    assert esgf.facet_values("CMIP6", facets, "timerange") == [
+        "*",
+        "1850/2014",
+    ]
+
+
+def test_globus_time_values_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _use_globus(monkeypatch, _GlobusClient({}))
+    assert esgf.facet_values("CMIP6", {"exp": "ssp585"}, "timerange") == []
+    assert "Failed to get the dates from" in caplog.text
+
+
+@pytest.mark.parametrize("project", ["CMIP7", "CORDEX-CMIP6"])
+def test_globus_time_values_only_on_stac(
+    monkeypatch: pytest.MonkeyPatch,
+    project: str,
+) -> None:
+    client = _GlobusFiles({})
+    _use_globus(monkeypatch, client)
+    assert not esgf.is_searchable(project, "timerange")
+    assert not client.requests

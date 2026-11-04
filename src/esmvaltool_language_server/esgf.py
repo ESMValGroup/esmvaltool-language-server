@@ -9,10 +9,15 @@ the configuration of the intake-esgf data source of ESMValCore for Globus and
 STAC indices, and with the facet mapping of :mod:`esmvalcore.io.esgf` for
 Solr indices. The version is not part of these mappings, ESMValCore adds the
 prefix "v" to the version of a dataset on ESGF.
-The time range of the datasets is found from the most common first and last
-date of the matching datasets on Solr indices, and from the first and last
-date of the files of up to 100 matching datasets on STAC indices, once the
-experiment is known.
+The time range of the datasets is found once the experiment is known: from
+the names of the files that match on Globus indices, by asking for the number
+of files with each name, from the first and last date of the files of up to
+100 matching datasets on STAC indices, and from the most common first and last
+date of the matching datasets on Solr indices.
+Globus indices also use these most common dates if they have too many files or
+if the dates cannot be read from the names of the files, as in many CMIP3
+files. The dates of a dataset can differ between the copies on different nodes
+and some are wrong, so the names of the files are preferred.
 Like ESMValCore, the dates of files are read from their names.
 The time ranges of the experiments of a dataset are joined, but not across
 years without data, because ESMValCore stops if there is no data for a year.
@@ -24,6 +29,8 @@ import dataclasses
 import functools
 import logging
 import re
+import threading
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -68,8 +75,20 @@ _ERRORS = (requests.RequestException, globus_sdk.GlobusError, LookupError)
 # The prefix that ESMValCore adds to the version of a dataset on ESGF.
 _VERSION_PREFIX = "v"
 
-# The fields of the first and last date of a dataset on Solr indices.
-_SOLR_DATES = ("datetime_start", "datetime_stop")
+# The maximum number of file names that a Globus index returns.
+_MAX_FILE_NAMES = 5000
+
+# Globus indices limit the number of requests and let a request wait a few
+# seconds if there are too many, so they are sent one by one.
+_GLOBUS_LOCK = threading.Lock()
+
+# The field of the first date of a dataset.
+_START_DATE = "datetime_start"
+
+# The fields of the last date of a dataset. Datasets on Globus indices have
+# one of these.
+_SOLR_END_DATES = ("datetime_stop",)
+_GLOBUS_END_DATES = ("datetime_end", "datetime_stop")
 
 # The first and last date at the end of the name of a file on ESGF, e.g.
 # tas_Amon_CESM2_historical_r1i1p1f1_gn_185001-201412.nc, with the suffix of
@@ -80,8 +99,8 @@ _FILE_DATES = re.compile(r"_(\d{4,14})-(\d{4,14})(?:-clim)?\.nc$")
 # found if the experiment is known.
 _EXPERIMENT = "exp"
 
-# Projects that are not published on the Solr indices.
-_NOT_ON_SOLR = frozenset({"CMIP7", "CORDEX-CMIP6"})
+# Projects that are only published on the STAC indices.
+_ONLY_ON_STAC = frozenset({"CMIP7", "CORDEX-CMIP6"})
 
 
 @dataclasses.dataclass(frozen=True)
@@ -142,7 +161,7 @@ def intake_esgf_mapping(project: str) -> _Mapping | None:
 
 
 def _solr_mapping(project: str) -> _Mapping | None:
-    if project not in FACETS or project in _NOT_ON_SOLR:
+    if project not in FACETS or project in _ONLY_ON_STAC:
         return None
     return _Mapping(
         {"project": "project", **FACETS[project], "version": "version"},
@@ -177,12 +196,14 @@ def _globus_values(
     index: GlobusESGFIndex,
     query: Query,
     field: str,
+    kind: str = "Dataset",
+    size: int = _MAX_VALUES,
 ) -> dict[str, int]:
     filters = [
         {"type": "match_any", "field_name": name, "values": values}
         for name, values in [
             *query.items(),
-            ("type", ["Dataset"]),
+            ("type", [kind]),
             ("latest", [True]),
             ("retracted", [False]),
         ]
@@ -191,12 +212,13 @@ def _globus_values(
         "type": "terms",
         "name": field,
         "field_name": field,
-        "size": _MAX_VALUES,
+        "size": size,
     }
-    response = index.client.post_search(
-        index.index_id,
-        {"q": "*", "limit": 0, "filters": filters, "facets": [facet]},
-    )
+    with _GLOBUS_LOCK:
+        response = index.client.post_search(
+            index.index_id,
+            {"q": "*", "limit": 0, "filters": filters, "facets": [facet]},
+        )
     return {
         bucket["value"]: bucket["count"]
         for bucket in response["facet_results"][0]["buckets"]
@@ -383,8 +405,7 @@ def is_searchable(project: str, facet: str) -> bool:
     -------
     :
         Whether the facet is known on one of the enabled indices, or selects
-        the time range and a Solr or STAC index that knows the project is
-        enabled.
+        the time range and an index that knows the project is enabled.
     """
     if facet in timerange.FACETS:
         return bool(_time_indices(project))
@@ -433,13 +454,15 @@ def facet_values(
         return sorted(set().union(*pool.map(search, jobs)))
 
 
-def _time_indices(project: str) -> list[SolrESGFIndex | STACESGFIndex]:
+def _time_indices(project: str) -> list[Index]:
     """Get the enabled indices that know the dates of datasets of a project."""
     return [
         index
         for index in _indices()
-        if isinstance(index, SolrESGFIndex | STACESGFIndex)
-        and _mapping(index, project) is not None
+        if _mapping(index, project) is not None
+        and not (
+            isinstance(index, GlobusESGFIndex) and project in _ONLY_ON_STAC
+        )
     ]
 
 
@@ -459,18 +482,33 @@ def _join(ranges: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
     return joined
 
 
-def _solr_ranges(
-    index: SolrESGFIndex,
+def _most_common(
+    index: SolrESGFIndex | GlobusESGFIndex,
+    query: Query,
+    fields: Iterable[str],
+) -> str | None:
+    """Get the most common value of some fields of datasets on an index."""
+    counts: Counter[str] = Counter()
+    for field in fields:
+        counts.update(_index_values(index, query, field))
+    return max(counts, key=counts.__getitem__, default=None)
+
+
+def _dataset_ranges(
+    index: SolrESGFIndex | GlobusESGFIndex,
     query: Query,
     experiment: str,
 ) -> list[tuple[str, str]]:
-    """Get the most common first and last date of datasets on Solr."""
+    """Get the most common first and last date of datasets on an index."""
+    end_dates = (
+        _GLOBUS_END_DATES
+        if isinstance(index, GlobusESGFIndex)
+        else _SOLR_END_DATES
+    )
 
     def most_common(query: Query) -> tuple[str, str] | None:
-        start, end = (
-            max(counts, key=counts.__getitem__, default=None)
-            for counts in (_index_values(index, query, f) for f in _SOLR_DATES)
-        )
+        start = _most_common(index, query, [_START_DATE])
+        end = _most_common(index, query, end_dates)
         if start is None or end is None:
             return None
         return timerange.from_iso(start, end)
@@ -479,6 +517,36 @@ def _solr_ranges(
         {**query, experiment: [exp]} for exp in query.get(experiment, [])
     ] or [query]
     return _join(r for q in queries if (r := most_common(q)) is not None)
+
+
+def _globus_ranges(
+    index: GlobusESGFIndex,
+    query: Query,
+    experiment: str,
+) -> list[tuple[str, str]]:
+    """Get the time ranges without missing years of datasets on Globus.
+
+    The files of the experiments of a dataset are joined. The names of the
+    files are found without searching for the datasets and their files first,
+    which is much slower for models with many ensemble members.
+    """
+    names = _globus_values(
+        index,
+        query,
+        "title",
+        kind="File",
+        size=_MAX_FILE_NAMES,
+    )
+    matches = [m for name in names if (m := _FILE_DATES.search(name))]
+    if len(names) >= _MAX_FILE_NAMES or len(matches) < len(names):
+        return _dataset_ranges(index, query, experiment)
+    differ = set(query.get(experiment, []))
+    datasets: dict[tuple[str, ...], list[tuple[str, str]]] = {}
+    for match in matches:
+        parts = match.string[: match.start()].split("_")
+        key = tuple(part for part in parts if part not in differ)
+        datasets.setdefault(key, []).append((match[1], match[2]))
+    return [r for found in datasets.values() for r in _join(found)]
 
 
 def _dataset_key(item: dict[str, Any], names: Iterable[str]) -> str:
@@ -542,7 +610,7 @@ def _stac_ranges(
 
 
 def _index_ranges(
-    index: SolrESGFIndex | STACESGFIndex,
+    index: Index,
     query: Query,
     experiment: str,
 ) -> list[tuple[str, str]]:
@@ -552,8 +620,10 @@ def _index_ranges(
     ESMValCore joins the data of a list of experiments.
     """
     try:
+        if isinstance(index, GlobusESGFIndex):
+            return _globus_ranges(index, query, experiment)
         if isinstance(index, SolrESGFIndex):
-            return _solr_ranges(index, query, experiment)
+            return _dataset_ranges(index, query, experiment)
         return _stac_ranges(index, query, experiment)
     except _ERRORS as exc:
         logger.warning("Failed to get the dates from %s: %s", index, exc)
@@ -570,7 +640,7 @@ def _time_values(
     if not indices:
         return []
 
-    def search(index: SolrESGFIndex | STACESGFIndex) -> list[tuple[str, str]]:
+    def search(index: Index) -> list[tuple[str, str]]:
         mapping = _mapping(index, project)
         if mapping is None:
             return []
