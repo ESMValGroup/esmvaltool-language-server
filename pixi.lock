@@ -12668,6 +12668,7 @@ packages:
   - pygls>=2.0
   - pyyaml
   - requests
+  - requests-cache
   requires_python: '>=3.12'
 - pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=recipe-json-schema#24173061110654d56e5d6358aab1b4a7721ebf92
   name: esmvalcore

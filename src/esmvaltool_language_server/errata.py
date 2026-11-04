@@ -16,12 +16,12 @@ import dataclasses
 import functools
 import logging
 import re
-import threading
-import time
+import sqlite3
 from collections import Counter
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import requests
+import requests_cache
 import yaml
 from lsprotocol import types
 
@@ -29,7 +29,8 @@ from esmvaltool_language_server import cmor, esgf
 from esmvaltool_language_server.schema import child, data_at
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Mapping
+    from collections.abc import Iterator, Mapping
+    from pathlib import Path as FilePath
 
     from esmvaltool_language_server.context import Path
 
@@ -41,6 +42,11 @@ SOURCE = "ESGF errata"
 
 # Stop waiting for the errata service after this many seconds.
 TIMEOUT = 10
+
+# The location of the cache of answers of the service, in the user's cache
+# directory, and how many seconds to keep them.
+CACHE = "esmvaltool-language-server/errata"
+MAX_AGE = 24 * 60 * 60
 
 # The names of the source of a dataset in the projects of the errata service.
 _SOURCE_FACETS = ("source_id", "source")
@@ -80,37 +86,41 @@ class Erratum:
 
 
 class ErrataService:
-    """Find errata on the ESGF errata service and remember them.
+    """Find errata on the ESGF errata service and remember them on disk.
 
     Parameters
     ----------
-    session:
-        The session to send requests with.
+    cache:
+        The location of the cache, relative to the user's cache directory.
     max_age:
         Ask the service again after this many seconds.
     """
 
     def __init__(
         self,
-        session: requests.Session | None = None,
-        max_age: float = 3600,
+        cache: str | FilePath = CACHE,
+        max_age: float = MAX_AGE,
     ) -> None:
-        self.session = session or requests.Session()
+        self.cache = cache
         self.max_age = max_age
-        self._lock = threading.Lock()
-        self._cache: dict[tuple[str, ...], tuple[float, object]] = {}
 
-    def _cached[T](self, key: tuple[str, ...], get: Callable[[], T]) -> T:
-        """Get a value from the cache, or get it and remember it."""
-        now = time.monotonic()
-        with self._lock:
-            found = self._cache.get(key)
-        if found is not None and now - found[0] < self.max_age:
-            return cast("T", found[1])
-        value = get()
-        with self._lock:
-            self._cache[key] = (now, value)
-        return value
+    @functools.cached_property
+    def session(self) -> requests.Session:
+        """The session to send requests with, created when it is needed."""
+        return self._open_session()
+
+    def _open_session(self) -> requests.Session:
+        try:
+            session = requests_cache.CachedSession(
+                str(self.cache),
+                use_cache_dir=True,
+                expire_after=self.max_age,
+            )
+            session.cache.delete(expired=True)
+        except (OSError, sqlite3.Error) as exc:
+            logger.warning("Not caching errata in %s: %s", self.cache, exc)
+            return requests.Session()
+        return session
 
     def _get(self, path: str, **params: str) -> dict[str, Any]:
         response = self.session.get(
@@ -123,49 +133,35 @@ class ErrataService:
 
     def _project_facets(self) -> dict[str, set[str]]:
         """Get the facets that can be searched for in each project."""
-
-        def get() -> dict[str, set[str]]:
-            setup = self._get("/2/search/errata/setup")
-            facets: dict[str, set[str]] = {}
-            for vocab in setup["vocabs"]:
-                if vocab.get("project"):
-                    facets.setdefault(vocab["project"], set()).add(
-                        vocab["key"]
-                    )
-            return facets
-
-        return self._cached(("setup",), get)
+        facets: dict[str, set[str]] = {}
+        for vocab in self._get("/2/search/errata/setup")["vocabs"]:
+            if vocab.get("project"):
+                facets.setdefault(vocab["project"], set()).add(vocab["key"])
+        return facets
 
     def _search(
         self,
         project: str,
         params: dict[str, str],
     ) -> list[dict[str, Any]]:
-        def get() -> list[dict[str, Any]]:
-            search = self._get("/2/search/errata", project=project, **params)
-            return search["results"]
-
-        key = ("search", project, *sorted(params.values()))
-        return self._cached(tuple(v.lower() for v in key), get)
+        search = self._get("/2/search/errata", project=project, **params)
+        return search["results"]
 
     def _erratum(self, uid: str) -> Erratum:
-        def get() -> Erratum:
-            issue = self._get("/2/publication/retrieve", uid=uid)["issue"]
-            return Erratum(
-                uid=uid,
-                title=issue["title"],
-                status=issue["status"],
-                datasets=tuple(issue["datasets"]),
-            )
-
-        return self._cached(("erratum", uid), get)
+        issue = self._get("/2/publication/retrieve", uid=uid)["issue"]
+        return Erratum(
+            uid=uid,
+            title=issue["title"],
+            status=issue["status"],
+            datasets=tuple(issue["datasets"]),
+        )
 
     def errata(
         self,
         project: str,
         source: str,
         *,
-        experiments: list[str] | None = None,
+        experiments: tuple[str, ...] | None = None,
         resolved: bool = True,
     ) -> list[Erratum]:
         """Find the errata of the datasets of a source in a project.
@@ -211,7 +207,12 @@ class ErrataService:
                 if resolved or result["status"] != "resolved"
             }
             return [self._erratum(uid) for uid in uids]
-        except (requests.RequestException, LookupError, ValueError) as exc:
+        except (
+            requests.RequestException,
+            LookupError,
+            ValueError,
+            sqlite3.Error,
+        ) as exc:
             logger.warning("Failed to find the errata of %s: %s", source, exc)
             return []
 
@@ -353,14 +354,17 @@ def find_errata(
                 lookups.setdefault(key, []).append((dataset, facets))
     # The variables that each erratum applies to, for each dataset.
     applies: dict[tuple[int, Erratum], list[str]] = {}
+    # The variables of a dataset usually need the same errata.
+    find = functools.cache(service.errata)
     for (project, source), variables in lookups.items():
         names = esgf.intake_esgf_facets(project) - {"project", "version"}
         for dataset, facets in variables:
             pinned = _values(facets.get("version")) is not None
-            for erratum in service.errata(
+            experiments = _values(facets.get("exp"))
+            for erratum in find(
                 project,
                 source,
-                experiments=_values(facets.get("exp")),
+                experiments=tuple(experiments) if experiments else None,
                 resolved=pinned,
             ):
                 if any(affects(i, facets, names) for i in erratum.datasets):

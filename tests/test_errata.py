@@ -1,13 +1,24 @@
 from __future__ import annotations
 
-from typing import Any
+import io
+import json
+import sqlite3
+import time
+from typing import TYPE_CHECKING, Any
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 import requests
+import requests_cache
+import urllib3
 import yaml
 from lsprotocol import types
+from requests.adapters import HTTPAdapter
 
 from esmvaltool_language_server import errata
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 CESM2 = "CMIP6.CMIP.NCAR.CESM2.historical.r1i1p1f1.Amon.tas.gn"
 SETUP = {
@@ -42,6 +53,7 @@ class _Session:
         self.issues = {issue["uid"]: issue for issue in issues}
         self.requests: list[tuple[str, dict[str, str]]] = []
         self.fail = False
+        self.answers_with_error = False
 
     def get(
         self,
@@ -54,6 +66,8 @@ class _Session:
         if self.fail:
             msg = "no connection"
             raise requests.ConnectionError(msg)
+        if self.answers_with_error:
+            return _Response({}, status=500)
         if path == "/2/search/errata/setup":
             return _Response(SETUP)
         if path == "/2/search/errata":
@@ -94,15 +108,50 @@ def _diagnostics(
 def _service(
     monkeypatch: pytest.MonkeyPatch,
     session: _Session,
-    max_age: float = 3600,
 ) -> errata.ErrataService:
     """Create a service that gets its answers from the session."""
+    monkeypatch.setattr(
+        errata.ErrataService,
+        "_open_session",
+        lambda _: session,
+    )
+    return errata.ErrataService()
 
-    def get(_: object, url: str, **kwargs: dict[str, str]) -> _Response:
-        return session.get(url, **kwargs)
 
-    monkeypatch.setattr(requests.Session, "get", get)
-    return errata.ErrataService(max_age=max_age)
+class _Adapter(HTTPAdapter):
+    """Answer the requests of a real session with the fake session."""
+
+    def __init__(self, session: _Session) -> None:
+        super().__init__()
+        self.session = session
+
+    def send(
+        self,
+        request: requests.PreparedRequest,
+        **_: object,
+    ) -> requests.Response:
+        url = urlsplit(str(request.url))
+        answer = self.session.get(
+            f"{errata.URL}{url.path}",
+            dict(parse_qsl(url.query)),
+        )
+        raw = urllib3.HTTPResponse(
+            body=io.BytesIO(json.dumps(answer.data).encode()),
+            status=answer.status,
+            preload_content=False,
+        )
+        return self.build_response(request, raw)
+
+
+def _cached_service(
+    path: Path,
+    session: _Session,
+    max_age: float = 3600,
+) -> errata.ErrataService:
+    """Create a service with a real cache on disk."""
+    service = errata.ErrataService(cache=path / "errata", max_age=max_age)
+    service.session.mount("https://", _Adapter(session))
+    return service
 
 
 def _recipe(facets: str) -> tuple[str, object]:
@@ -131,24 +180,66 @@ def test_service_searches_project_and_source(
     ) in (session.requests)
 
 
-def test_service_remembers_results(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_service_remembers_results_on_disk(tmp_path: Path) -> None:
     session = _Session([_issue()])
-    service = _service(monkeypatch, session)
-    service.errata("CMIP6", "CESM2")
+    found = _cached_service(tmp_path, session).errata("CMIP6", "CESM2")
+    assert (tmp_path / "errata.sqlite").exists()
     count = len(session.requests)
-    service.errata("cmip6", "cesm2")
+    assert _cached_service(tmp_path, session).errata("CMIP6", "CESM2") == found
     assert len(session.requests) == count
 
 
-def test_service_asks_again_after_max_age(
+def test_service_asks_again_after_max_age(tmp_path: Path) -> None:
+    session = _Session([_issue()])
+    service = _cached_service(tmp_path, session, max_age=0.01)
+    service.errata("CMIP6", "CESM2")
+    count = len(session.requests)
+    time.sleep(0.05)
+    service.errata("CMIP6", "CESM2")
+    assert len(session.requests) == 2 * count
+
+
+def test_service_removes_old_answers(tmp_path: Path) -> None:
+    session = _Session([_issue()])
+    _cached_service(tmp_path, session, max_age=0.01).errata("CMIP6", "CESM2")
+    time.sleep(0.05)
+    service = _cached_service(tmp_path, session)
+    assert isinstance(service.session, requests_cache.CachedSession)
+    assert len(service.session.cache.responses) == 0
+
+
+def test_service_does_not_remember_failures(tmp_path: Path) -> None:
+    session = _Session([_issue()])
+    session.answers_with_error = True
+    service = _cached_service(tmp_path, session)
+    assert service.errata("CMIP6", "CESM2") == []
+    session.answers_with_error = False
+    assert service.errata("CMIP6", "CESM2") != []
+
+
+def test_service_works_without_cache(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    (tmp_path / "file").touch()
+    session = _Session([_issue()])
+    service = _cached_service(tmp_path / "file", session)
+    assert not isinstance(service.session, requests_cache.CachedSession)
+    assert [e.uid for e in service.errata("CMIP6", "CESM2")] == ["u1"]
+    assert "Not caching errata" in caplog.text
+
+
+def test_service_survives_failure_of_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session = _Session([_issue()])
-    service = _service(monkeypatch, session, max_age=0)
-    service.errata("CMIP6", "CESM2")
-    count = len(session.requests)
-    service.errata("CMIP6", "CESM2")
-    assert len(session.requests) == 2 * count
+
+    def fail(*_: object, **__: object) -> None:
+        msg = "database is locked"
+        raise sqlite3.OperationalError(msg)
+
+    monkeypatch.setattr(session, "get", fail)
+    assert _service(monkeypatch, session).errata("CMIP6", "CESM2") == []
 
 
 def test_service_ignores_unknown_project(
@@ -543,3 +634,21 @@ def test_erratum_of_several_experiments_is_found_once(
     found = _diagnostics(text, recipe, _service(monkeypatch, session))
     assert len(found) == 1
     assert len(_fetched(session)) == 1
+
+
+def test_variables_of_a_dataset_search_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = (
+        "datasets:\n"
+        "  - {project: CMIP6, dataset: CESM2}\n"
+        "diagnostics:\n"
+        "  diag:\n"
+        "    variables:\n"
+        "      tas: {mip: Amon}\n"
+        "      pr: {mip: Amon}\n"
+    )
+    session = _Session([_issue()])
+    service = _service(monkeypatch, session)
+    _diagnostics(text, yaml.safe_load(text), service)
+    assert len(_searches(session)) == 1

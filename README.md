@@ -89,8 +89,8 @@ authors and references it defines.
   locally with the affected datasets.
   The errata are shown after the other problems, as they are found, which can
   take up to a minute for a recipe with many models.
-  They are remembered for an hour and left out if the service cannot be
-  reached.
+  The answers of the service are kept for a day in the cache directory of the
+  user, and errata are left out if the service cannot be reached.
   Turn this off with the setting `esmvaltool.languageServer.errata` in Visual
   Studio Code, or with the initialization option `errata` in other editors.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
