@@ -361,7 +361,7 @@ def test_hover_value(split_cursor: SplitCursor) -> None:
     assert result is not None
     assert isinstance(result.contents, types.MarkupContent)
     assert result.contents.value == (
-        "Project, for example CMIP6.\n\n"
+        "Project, for example `CMIP6`.\n\n"
         "`CMIP6`: [Project website](https://wcrp-cmip.org/cmip-phases/cmip6/)"
     )
 
