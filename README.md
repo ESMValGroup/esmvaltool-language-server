@@ -44,9 +44,11 @@ authors and references it defines.
   other data source could not be searched.
   To get fresh suggestions, for example for local files that you just added
   or after changing the indices in the intake-esgf configuration, restart the
-  language server: in Visual Studio Code, run
-  **ESMValTool: Restart Language Server** from the command palette; in Emacs,
-  run `M-x eglot-reconnect`.
+  language server: in Visual Studio Code, press
+  <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>
+  (<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> on macOS) and run
+  **ESMValTool: Restart Language Server**; in Emacs, run
+  `M-x eglot-reconnect`.
 - Documentation of preprocessor functions and other keys, their values, and
   preprocessors, with default values, when you hover over them.
   Hovering over the value of a facet, such as `dataset`, `exp`,
