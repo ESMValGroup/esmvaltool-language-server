@@ -39,7 +39,7 @@ DEBOUNCE_SECONDS = 0.3
 
 # Wait this long for the values of a facet to be found on ESGF before
 # suggesting other values.
-FACET_SEARCH_SECONDS = 2.0
+FACET_SEARCH_SECONDS = 5.0
 
 POPULATE_DATASETS = "esmvaltool.populateDatasets"
 
@@ -208,7 +208,7 @@ async def completion(
     ) -> list[str] | None:
         future = ls.facet_search.submit(project, facets, facet)
         if future is None:
-            return None
+            return []
         if future.done():
             return future.result()
         pending.append(future)
