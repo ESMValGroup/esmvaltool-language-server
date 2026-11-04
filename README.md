@@ -76,6 +76,17 @@ authors and references it defines.
   (<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> on macOS) and run
   **ESMValTool: Restart Language Server**; in Emacs, run
   `M-x eglot-reconnect`.
+- Errata of the datasets in a recipe, from the
+  [ESGF errata service](https://errata.esgf.io), shown on the line of the
+  dataset with their status and a link to the description.
+  They are shown as information, to distinguish them from errors and warnings
+  about the recipe itself.
+  Resolved errata are only shown for a dataset with an affected `version`.
+  To find them, the project, name, and experiment of each dataset are sent to
+  the service, which can take up to a minute for a recipe with many models.
+  The answers are kept for a day.
+  Turn this off with the setting `esmvaltool.languageServer.errata` in Visual
+  Studio Code, or with the initialization option `errata` in other editors.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
   of the dataset in `reference_dataset` or `alternative_dataset`, or of a
   diagnostic script.
@@ -168,6 +179,8 @@ command, for example `"/path/to/env/bin/esmvaltool-language-server"`.
 Problems are shown with Flymake, completion works with
 `completion-at-point` (`C-M-i`), documentation is shown by ElDoc, and `M-.`
 goes to a definition.
+To turn off the errata of datasets, add `:initializationOptions (:errata
+:json-false)` after `"--stdio"` in the command above.
 
 ## Development
 
@@ -198,9 +211,9 @@ npm run package                    # build a package that can be installed
 ```
 
 The tests marked `network` need internet access.
-They check the Essential Model Documentation of CMIP7 models and the links in
-the recipe schema and in the documentation shown when hovering over tags,
-references, and facets.
+They check the Essential Model Documentation of CMIP7 models, the API of the
+ESGF errata service, and the links in the recipe schema and in the documentation
+shown when hovering over tags, references, and facets.
 Links to the latest documentation of ESMValCore and ESMValTool are checked
 against the documentation of the development versions that the server is
 developed with; to use other documentation, set `ESMVALCORE_DOCS` or

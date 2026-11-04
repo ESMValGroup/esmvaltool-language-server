@@ -168,6 +168,36 @@ describe("ESMValTool extension", () => {
     assert.equal(extension.exports.isRecipe(document.uri.toString()), true);
   });
 
+  it("sends the errata setting to the language server", async () => {
+    const extension = vscode.extensions.getExtension<{
+      errataOption: boolean | undefined;
+      mode: string;
+    }>("ESMValGroup.esmvaltool");
+    assert.ok(extension);
+    const api = extension.exports;
+    assert.equal(api.errataOption, true);
+    const settings = vscode.workspace.getConfiguration(
+      "esmvaltool.languageServer",
+    );
+    await settings.update("errata", false, vscode.ConfigurationTarget.Global);
+    try {
+      await waitFor(
+        () => (api.errataOption === false ? true : undefined),
+        "the errata setting",
+      );
+    } finally {
+      await settings.update(
+        "errata",
+        undefined,
+        vscode.ConfigurationTarget.Global,
+      );
+    }
+    await waitFor(
+      () => (api.errataOption === true ? true : undefined),
+      "the default errata setting",
+    );
+  });
+
   it("falls back to the schema without the language server", async () => {
     const extension = vscode.extensions.getExtension<{ mode: string }>(
       "ESMValGroup.esmvaltool",

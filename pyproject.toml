@@ -32,6 +32,7 @@ dependencies = [
     "pygls>=2.0",
     "pyyaml",
     "requests",
+    "requests-cache",
 ]
 description = "Language server for ESMValTool recipes"
 license = "Apache-2.0"
@@ -155,6 +156,7 @@ xarray = "*"
 zarr = ">3"
 globus-sdk = "*"
 pygls = ">=2.0"
+requests-cache = "*"
 
 [tool.pixi.pypi-dependencies]
 esmvaltool-language-server = { path = ".", editable = true }
