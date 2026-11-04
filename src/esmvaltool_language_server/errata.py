@@ -448,7 +448,10 @@ def find_errata(
     # The variables of a dataset usually need the same errata.
     find = functools.cache(service.errata)
     for (project, source), variables in lookups.items():
-        names = esgf.intake_esgf_facets(project) - {"project", "version"}
+        mapping = esgf.intake_esgf_mapping(project)
+        names = (
+            set(mapping.facets) - {"project", "version"} if mapping else set()
+        )
         for dataset, facets in variables:
             pinned = _values(facets.get("version")) is not None
             experiments = _values(facets.get("exp"))

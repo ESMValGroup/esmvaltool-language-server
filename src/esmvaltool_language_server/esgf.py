@@ -189,26 +189,6 @@ def intake_esgf_mapping(project: str) -> _Mapping | None:
     return None
 
 
-def intake_esgf_facets(project: str) -> set[str]:
-    """Get the facets of the intake-esgf data source of a project.
-
-    These are the facets in the identifiers of the datasets on ESGF.
-
-    Parameters
-    ----------
-    project:
-        The project.
-
-    Returns
-    -------
-    :
-        The facets in the configured or the default configuration of the
-        data source. Empty if there is none.
-    """
-    mapping = intake_esgf_mapping(project)
-    return set() if mapping is None else set(mapping.facets)
-
-
 def _solr_mapping(project: str) -> _Mapping | None:
     if project not in FACETS:
         return None
