@@ -586,6 +586,15 @@ def test_stac_time_values_unknown_project(stac_dates: _Session) -> None:
     assert not esgf.is_searchable("OBS6", "timerange")
 
 
+def test_stac_time_values_without_collection(stac_dates: _Session) -> None:
+    facets = {"exp": "historical"}
+    failures = esgf.failures()
+    assert esgf.is_searchable("CMIP5", "timerange")
+    assert esgf.facet_values("CMIP5", facets, "timerange") == []
+    assert not any(stac_dates.params)
+    assert esgf.failures() == failures
+
+
 @pytest.mark.parametrize("exp", [None, "hist*"])
 def test_stac_time_values_without_experiment(
     stac_dates: _Session,

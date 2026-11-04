@@ -549,10 +549,12 @@ def facet_values(
         return sorted(set().union(*pool.map(search, jobs)))
 
 
-def _time_indices(project: str) -> list[Index]:
+def _time_indices(project: str) -> list[tuple[Index, _Mapping]]:
     """Get the enabled indices that know the dates of datasets of a project."""
     return [
-        index for index in _indices() if _mapping(index, project) is not None
+        (index, mapping)
+        for index in _indices()
+        if (mapping := _mapping(index, project)) is not None
     ]
 
 
@@ -713,14 +715,12 @@ def _time_values(
     facet: str,
 ) -> list[str]:
     """Get the values of a time facet from the dates of datasets."""
-    indices = _time_indices(project)
-    if not indices:
+    jobs = _time_indices(project)
+    if not jobs:
         return []
 
-    def search(index: Index) -> list[tuple[str, str]]:
-        mapping = _mapping(index, project)
-        if mapping is None:
-            return []
+    def search(job: tuple[Index, _Mapping]) -> list[tuple[str, str]]:
+        index, mapping = job
         query = mapping.query({**facets, "project": project}, facet)
         # Datasets of different experiments cover different time ranges and
         # there may be too many of them to get all of their dates.
@@ -729,6 +729,6 @@ def _time_values(
             return []
         return _index_ranges(index, query, experiment)
 
-    with ThreadPoolExecutor(max_workers=len(indices)) as pool:
-        ranges = [r for found in pool.map(search, indices) for r in found]
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        ranges = [r for found in pool.map(search, jobs) for r in found]
     return timerange.suggestions(facet, ranges)
