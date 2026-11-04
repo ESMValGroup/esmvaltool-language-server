@@ -57,7 +57,12 @@ class _Session:
             return _Response(SETUP)
         if path == "/2/search/errata":
             return _Response(
-                {"results": [{"uid": uid} for uid in self.issues]},
+                {
+                    "results": [
+                        {"uid": issue["uid"], "status": issue["status"]}
+                        for issue in self.issues.values()
+                    ],
+                },
             )
         return _Response({"issue": self.issues[params["uid"]]})
 
@@ -73,6 +78,16 @@ def _issue(
         "status": status,
         "datasets": list(datasets),
     }
+
+
+def _diagnostics(
+    text: str,
+    recipe: object,
+    service: errata.ErrataService,
+) -> list[types.Diagnostic]:
+    """Get the diagnostics after all errata have been looked up."""
+    updates = list(errata.errata_diagnostics(text, recipe, service))
+    return updates[-1] if updates else []
 
 
 def _service(
@@ -197,7 +212,7 @@ def test_diagnostics_for_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
         ],
     )
     service = _service(monkeypatch, session)
-    found = errata.errata_diagnostics(text, recipe, service)
+    found = _diagnostics(text, recipe, service)
     assert [d.message for d in found] == [
         "Problem open",
         "Problem closed",
@@ -226,7 +241,7 @@ def test_diagnostics_use_variable_group_facets(
         "          - {dataset: CESM2, exp: ssp585}\n"
     )
     service = _service(monkeypatch, _Session([_issue()]))
-    found = errata.errata_diagnostics(text, yaml.safe_load(text), service)
+    found = _diagnostics(text, yaml.safe_load(text), service)
     assert [d.range.start.line for d in found] == [6]
 
 
@@ -241,7 +256,7 @@ def test_no_diagnostics_without_lookup(
     text, recipe = _recipe(facets)
     session = _Session([_issue()])
     service = _service(monkeypatch, session)
-    assert errata.errata_diagnostics(text, recipe, service) == []
+    assert _diagnostics(text, recipe, service) == []
     assert not [r for r in session.requests if r[0] == "/2/search/errata"]
 
 
@@ -249,7 +264,7 @@ def test_no_diagnostics_for_invalid_yaml(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     service = _service(monkeypatch, _Session([_issue()]))
-    assert errata.errata_diagnostics("a: [", {}, service) == []
+    assert _diagnostics("a: [", {}, service) == []
 
 
 def test_resolved_errata_need_a_version(
@@ -264,7 +279,7 @@ def test_resolved_errata_need_a_version(
         ],
     )
     service = _service(monkeypatch, session)
-    found = errata.errata_diagnostics(text, recipe, service)
+    found = _diagnostics(text, recipe, service)
     assert [d.message for d in found] == ["Problem wontfix", "Problem new"]
 
 
@@ -273,7 +288,7 @@ def test_resolved_erratum_needs_the_version_to_be_affected(
 ) -> None:
     text, recipe = _recipe("project: CMIP6, dataset: CESM2, version: v1")
     service = _service(monkeypatch, _Session([_issue("r", "resolved")]))
-    assert errata.errata_diagnostics(text, recipe, service) == []
+    assert _diagnostics(text, recipe, service) == []
 
 
 def test_errata_per_variable_group(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -299,7 +314,7 @@ def test_errata_per_variable_group(monkeypatch: pytest.MonkeyPatch) -> None:
         CESM2.replace(".tas.", f".{name}.") for name in ("tas", "pr", "ta")
     ]
     service = _service(monkeypatch, session)
-    found = errata.errata_diagnostics(text, yaml.safe_load(text), service)
+    found = _diagnostics(text, yaml.safe_load(text), service)
     assert [(d.range.start.line, d.message) for d in found] == [
         (1, "Problem some (affects tas, ta)"),
         (1, "Problem all"),
@@ -374,7 +389,7 @@ def test_errata_of_merged_datasets(
 ) -> None:
     issue = _issue(datasets=(CESM2.replace(".tas.", ".pr."),))
     service = _service(monkeypatch, _Session([issue]))
-    found = errata.errata_diagnostics(text, yaml.safe_load(text), service)
+    found = _diagnostics(text, yaml.safe_load(text), service)
     assert [d.range.start.line for d in found] == [line]
 
 
@@ -391,7 +406,7 @@ def test_erratum_of_aliased_datasets_is_shown_once(
         "      tas: {mip: Amon}\n"
     )
     service = _service(monkeypatch, _Session([_issue()]))
-    found = errata.errata_diagnostics(text, yaml.safe_load(text), service)
+    found = _diagnostics(text, yaml.safe_load(text), service)
     assert [d.range.start.line for d in found] == [1]
 
 
@@ -425,5 +440,59 @@ def test_erratum_of_dataset_with_several_paths_is_merged(
         datasets=tuple(CESM2.replace(".tas.", f".{v}.") for v in affected),
     )
     service = _service(monkeypatch, _Session([issue]))
-    found = errata.errata_diagnostics(text, yaml.safe_load(text), service)
+    found = _diagnostics(text, yaml.safe_load(text), service)
     assert [(d.range.start.line, d.message) for d in found] == [(1, message)]
+
+
+def _fetched(session: _Session) -> set[str]:
+    return {
+        params["uid"]
+        for path, params in session.requests
+        if path == "/2/publication/retrieve"
+    }
+
+
+@pytest.mark.parametrize(
+    ("facets", "fetched"),
+    [
+        ("project: CMIP6, dataset: CESM2", {"new"}),
+        ("project: CMIP6, dataset: CESM2, version: '*'", {"new"}),
+        ("project: CMIP6, dataset: CESM2, version: v1", {"new", "resolved"}),
+    ],
+)
+def test_resolved_errata_are_only_fetched_for_a_version(
+    monkeypatch: pytest.MonkeyPatch,
+    facets: str,
+    fetched: set[str],
+) -> None:
+    text, recipe = _recipe(facets)
+    session = _Session([_issue("new"), _issue("resolved", "resolved")])
+    _diagnostics(text, recipe, _service(monkeypatch, session))
+    assert _fetched(session) == fetched
+
+
+def test_diagnostics_are_yielded_for_each_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = (
+        "datasets:\n"
+        "  - {project: CMIP6, dataset: CESM2}\n"
+        "  - {project: CMIP6, dataset: MIROC6}\n"
+        "  - {project: CMIP6, dataset: CESM2, exp: historical}\n"
+        "diagnostics:\n"
+        "  diag:\n"
+        "    variables:\n"
+        "      tas: {mip: Amon}\n"
+    )
+    session = _Session(
+        [
+            _issue("cesm2"),
+            _issue("miroc", datasets=(CESM2.replace("CESM2", "MIROC6"),)),
+        ],
+    )
+    service = _service(monkeypatch, session)
+    updates = errata.errata_diagnostics(text, yaml.safe_load(text), service)
+    assert [[d.range.start.line for d in found] for found in updates] == [
+        [1, 3],
+        [1, 3, 2],
+    ]

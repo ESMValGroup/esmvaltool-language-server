@@ -79,14 +79,14 @@ class RecipeLanguageServer(LanguageServer):
         except Exception:
             logger.exception("Failed to check recipe %s", uri)
             return
-        if self.pending.get(uri) is asyncio.current_task():
-            del self.pending[uri]
         if recipe is not MISSING:
             self.recipes[uri] = recipe
         lines = document.lines
         self._publish(document, lines, version, diagnostics)
         if recipe is not MISSING and self.errata_enabled:
             await self._publish_errata(document, lines, recipe, diagnostics)
+        if self.pending.get(uri) is asyncio.current_task():
+            del self.pending[uri]
 
     def _publish(
         self,
@@ -120,27 +120,36 @@ class RecipeLanguageServer(LanguageServer):
         """Publish the diagnostics again with the errata of the datasets.
 
         The errata are looked up after the diagnostics have been published,
-        because the service may be slow. Nothing is published if there are no
-        errata or the recipe has changed or was closed in the meantime.
+        because the service may be slow, and published as they are found.
+        This stops if the recipe has changed or was closed in the meantime.
         """
         uri, version = document.uri, document.version
         loop = asyncio.get_running_loop()
+        shown: list[types.Diagnostic] = []
         try:
-            errata = await loop.run_in_executor(
-                None,
-                errata_diagnostics,
+            updates = errata_diagnostics(
                 document.source,
                 recipe,
                 self.errata,
             )
+            while True:
+                errata = await loop.run_in_executor(None, next, updates, None)
+                if (
+                    errata is None
+                    or uri not in self.workspace.text_documents
+                    or self.workspace.get_text_document(uri).version != version
+                ):
+                    return
+                if errata != shown:
+                    shown = errata
+                    self._publish(
+                        document,
+                        lines,
+                        version,
+                        [*diagnostics, *errata],
+                    )
         except Exception:
             logger.exception("Failed to find errata for %s", uri)
-            return
-        if not errata or uri not in self.workspace.text_documents:
-            return
-        if self.workspace.get_text_document(uri).version != version:
-            return
-        self._publish(document, lines, version, [*diagnostics, *errata])
 
 
 def _check_document(text: str) -> tuple[object, list[types.Diagnostic]]:

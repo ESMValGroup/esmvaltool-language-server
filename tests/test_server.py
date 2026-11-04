@@ -16,7 +16,7 @@ from pygls.workspace import Workspace
 from esmvaltool_language_server import server
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Iterator
     from pathlib import Path
 
 TIMEOUT = 60
@@ -251,9 +251,9 @@ def _errata_server(
         published.append,
     )
 
-    def errata_diagnostics(*_: object) -> list[types.Diagnostic]:
+    def errata_diagnostics(*_: object) -> Iterator[list[types.Diagnostic]]:
         release.wait(TIMEOUT)
-        return [_ERRATUM]
+        yield [_ERRATUM]
 
     monkeypatch.setattr(server, "errata_diagnostics", errata_diagnostics)
     return ls, published
@@ -315,6 +315,38 @@ async def test_errata_can_be_turned_off(
     ls.errata_enabled = False
     await ls._check("file:///recipe_test.yml", 0)
     assert len(published) == 1
+
+
+@pytest.mark.asyncio
+async def test_errata_are_published_as_they_are_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls, published = _errata_server(monkeypatch, threading.Event())
+    other = types.Diagnostic(range=_ERRATUM.range, message="Other erratum")
+    updates = [[], [_ERRATUM], [_ERRATUM], [_ERRATUM, other]]
+    monkeypatch.setattr(server, "errata_diagnostics", lambda *_: iter(updates))
+    await ls._check("file:///recipe_test.yml", 0)
+    assert len(published) == 3
+    assert published[1].diagnostics[-1] == _ERRATUM
+    assert published[2].diagnostics[-2:] == [_ERRATUM, other]
+
+
+@pytest.mark.asyncio
+async def test_new_check_cancels_looking_up_errata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    ls, published = _errata_server(monkeypatch, release)
+    ls.schedule_check("file:///recipe_test.yml")
+    first = ls.pending["file:///recipe_test.yml"]
+    await _wait_for(published)
+    ls.schedule_check("file:///recipe_test.yml")
+    with contextlib.suppress(asyncio.CancelledError):
+        await first
+    assert first.cancelled()
+    release.set()
+    await ls.pending["file:///recipe_test.yml"]
+    assert "file:///recipe_test.yml" not in ls.pending
 
 
 @pytest.mark.asyncio

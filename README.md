@@ -87,8 +87,10 @@ authors and references it defines.
   To find them, the project and name of each dataset in the recipe are sent to
   the service; other facets, such as the version, are compared locally with
   the affected datasets.
-  The errata are shown a moment after the other problems, are remembered for
-  an hour, and are left out if the service cannot be reached.
+  The errata are shown after the other problems, as they are found, which can
+  take up to a minute for a recipe with many models.
+  They are remembered for an hour and left out if the service cannot be
+  reached.
   Turn this off with the setting `esmvaltool.languageServer.errata` in Visual
   Studio Code, or with the initialization option `errata` in other editors.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,

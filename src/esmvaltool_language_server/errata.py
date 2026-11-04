@@ -142,7 +142,13 @@ class ErrataService:
 
         return self._cached(("erratum", uid), get)
 
-    def errata(self, project: str, source: str) -> list[Erratum]:
+    def errata(
+        self,
+        project: str,
+        source: str,
+        *,
+        resolved: bool = True,
+    ) -> list[Erratum]:
         """Find the errata of the datasets of a source in a project.
 
         Parameters
@@ -151,6 +157,9 @@ class ErrataService:
             The project, for example CMIP6.
         source:
             The source of the datasets, for example CESM2.
+        resolved:
+            Whether to include resolved errata. Getting an erratum takes a
+            request, and the search already tells which ones are resolved.
 
         Returns
         -------
@@ -171,7 +180,11 @@ class ErrataService:
                     **{facet: source},
                 ),
             )
-            uids = [result["uid"] for result in search["results"]]
+            uids = [
+                result["uid"]
+                for result in search["results"]
+                if resolved or result["status"] != "resolved"
+            ]
             with ThreadPoolExecutor(max_workers=8) as pool:
                 return list(pool.map(self._erratum, uids))
         except (requests.RequestException, LookupError, ValueError) as exc:
@@ -269,30 +282,18 @@ def _list(data: object) -> list[object]:
     return data if isinstance(data, list) else []
 
 
-def _applies(
-    erratum: Erratum,
-    facets: Mapping[object, object],
-    names: set[str],
-) -> bool:
-    """Check if an erratum applies to the dataset with these facets.
-
-    A resolved erratum usually no longer affects the latest version, which
-    is used if the recipe does not pin a version, so it only applies to a
-    dataset with a version.
-    """
-    if erratum.status == "resolved" and _values(facets.get("version")) is None:
-        return False
-    return any(affects(i, facets, names) for i in erratum.datasets)
-
-
 def find_errata(
     recipe: object,
     service: ErrataService,
-) -> list[tuple[Path, Erratum, list[str] | None]]:
+) -> Iterator[list[tuple[Path, Erratum, list[str] | None]]]:
     """Find the errata of the datasets in a recipe.
 
     Aliases and merge keys can make a dataset part of several paths. It is
     reported once, for all of its variables.
+
+    A resolved erratum usually no longer affects the latest version, which
+    is used if the recipe does not pin a version, so it is only looked up for
+    a dataset with a version.
 
     Parameters
     ----------
@@ -301,43 +302,49 @@ def find_errata(
     service:
         The errata service.
 
-    Returns
-    -------
+    Yields
+    ------
     :
-        The path of each dataset with an erratum, the erratum, and the short
+        After looking up the errata of each source, all errata found so far:
+        the path of each dataset with an erratum, the erratum, and the short
         names of the variables it applies to, or None if it applies to all
         variables of the dataset.
     """
-    # The first path, the number of variables, and the variables that each
-    # erratum applies to, for each dataset.
+    # The first path and the number of variables of each dataset, and the
+    # variables to look up for each project and source.
     paths: dict[int, Path] = {}
     totals: Counter[int] = Counter()
-    applies: dict[tuple[int, Erratum], list[str]] = {}
+    lookups: dict[
+        tuple[str, str],
+        list[tuple[int, dict[object, object]]],
+    ] = {}
     for path in _dataset_paths(recipe):
         dataset = id(data_at(recipe, path))
         paths.setdefault(dataset, path)
-        all_variables = cmor.dataset_facets(path, recipe)
-        totals[dataset] += len(all_variables)
-        for facets in all_variables:
+        for facets in cmor.dataset_facets(path, recipe):
+            totals[dataset] += 1
             project, source = facets.get("project"), facets.get("dataset")
-            if not (cmor.is_name(project) and cmor.is_name(source)):
-                continue
-            names = esgf.intake_esgf_facets(str(project)) - {
-                "project",
-                "version",
-            }
-            for erratum in service.errata(str(project), str(source)):
-                if _applies(erratum, facets, names):
-                    variables = applies.setdefault((dataset, erratum), [])
-                    variables.append(str(facets.get("short_name")))
-    return [
-        (
-            paths[dataset],
-            erratum,
-            None if len(variables) == totals[dataset] else variables,
-        )
-        for (dataset, erratum), variables in applies.items()
-    ]
+            if cmor.is_name(project) and cmor.is_name(source):
+                key = (str(project), str(source))
+                lookups.setdefault(key, []).append((dataset, facets))
+    # The variables that each erratum applies to, for each dataset.
+    applies: dict[tuple[int, Erratum], list[str]] = {}
+    for (project, source), variables in lookups.items():
+        names = esgf.intake_esgf_facets(project) - {"project", "version"}
+        for dataset, facets in variables:
+            pinned = _values(facets.get("version")) is not None
+            for erratum in service.errata(project, source, resolved=pinned):
+                if any(affects(i, facets, names) for i in erratum.datasets):
+                    affected = applies.setdefault((dataset, erratum), [])
+                    affected.append(str(facets.get("short_name")))
+        yield [
+            (
+                paths[dataset],
+                erratum,
+                None if len(affected) == totals[dataset] else affected,
+            )
+            for (dataset, erratum), affected in applies.items()
+        ]
 
 
 def _node_at(root: yaml.Node, path: Path) -> yaml.Node:
@@ -361,11 +368,34 @@ def _message(erratum: Erratum, variables: list[str] | None) -> str:
     return f"{erratum.title} (affects {', '.join(dict.fromkeys(variables))})"
 
 
+def _diagnostic(
+    node: yaml.Node,
+    lines: list[str],
+    erratum: Erratum,
+    variables: list[str] | None,
+) -> types.Diagnostic:
+    line, column = node.start_mark.line, node.start_mark.column
+    end = len(lines[line].rstrip()) if line < len(lines) else column
+    return types.Diagnostic(
+        range=types.Range(
+            start=types.Position(line=line, character=column),
+            end=types.Position(line=line, character=max(end, column)),
+        ),
+        message=_message(erratum, variables),
+        severity=types.DiagnosticSeverity.Warning
+        if erratum.status in _OPEN
+        else types.DiagnosticSeverity.Information,
+        code="erratum",
+        code_description=types.CodeDescription(href=erratum.url),
+        source=SOURCE,
+    )
+
+
 def errata_diagnostics(
     text: str,
     recipe: object,
     service: ErrataService,
-) -> list[types.Diagnostic]:
+) -> Iterator[list[types.Diagnostic]]:
     """Describe the errata of the datasets in a recipe as LSP diagnostics.
 
     Parameters
@@ -377,35 +407,20 @@ def errata_diagnostics(
     service:
         The errata service.
 
-    Returns
-    -------
+    Yields
+    ------
     :
-        A diagnostic at the line of each dataset with an erratum, a warning
-        if the erratum is open and information otherwise.
+        After looking up the errata of each source, a diagnostic at the line
+        of each dataset with an erratum found so far, a warning if the erratum
+        is open and information otherwise.
     """
     try:
         root = yaml.compose(text, Loader=yaml.SafeLoader)
     except yaml.YAMLError:
-        return []
+        return
     lines = text.splitlines()
-    diagnostics = []
-    for path, erratum, variables in find_errata(recipe, service):
-        node = _node_at(root, path)
-        line, column = node.start_mark.line, node.start_mark.column
-        end = len(lines[line].rstrip()) if line < len(lines) else column
-        diagnostics.append(
-            types.Diagnostic(
-                range=types.Range(
-                    start=types.Position(line=line, character=column),
-                    end=types.Position(line=line, character=max(end, column)),
-                ),
-                message=_message(erratum, variables),
-                severity=types.DiagnosticSeverity.Warning
-                if erratum.status in _OPEN
-                else types.DiagnosticSeverity.Information,
-                code="erratum",
-                code_description=types.CodeDescription(href=erratum.url),
-                source=SOURCE,
-            ),
-        )
-    return diagnostics
+    for found in find_errata(recipe, service):
+        yield [
+            _diagnostic(_node_at(root, path), lines, erratum, variables)
+            for path, erratum, variables in found
+        ]
