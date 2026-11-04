@@ -361,7 +361,7 @@ def test_hover_value(split_cursor: SplitCursor) -> None:
     assert result is not None
     assert isinstance(result.contents, types.MarkupContent)
     assert result.contents.value == (
-        "Project, for example CMIP6.\n\n"
+        "Project, for example `CMIP6`.\n\n"
         "`CMIP6`: [Project website](https://wcrp-cmip.org/cmip-phases/cmip6/)"
     )
 
@@ -623,3 +623,118 @@ def test_definition_unknown_tag(
 def test_definition_invalid_yaml(split_cursor: SplitCursor) -> None:
     text = RECIPE.replace(": pp", ": p|p") + "invalid: [\n"
     assert _definition(split_cursor, text) is None
+
+
+DATASETS_RECIPE = dedent("""\
+    datasets:
+      - {dataset: ERA5, project: OBS6}
+      - {dataset: CESM2, project: CMIP6, alias: model}
+    diagnostics:
+      diag:
+        additional_datasets:
+          - {dataset: MSWEP, project: OBS6}
+        variables:
+          pr:
+            additional_datasets: [{dataset: GPCP-SG, project: OBS6}]
+            reference_dataset: ERA5|MSWEP
+            alternative_dataset: model
+            mip: Amon
+        scripts: null
+    """)
+
+
+def _dataset_definition(old: str, offset: int) -> types.Location | None:
+    """Go to the definition at an offset in the value after `old`."""
+    index = DATASETS_RECIPE.index(old) + len(old) + offset
+    lines = DATASETS_RECIPE[:index].split("\n")
+    position = types.Position(line=len(lines) - 1, character=len(lines[-1]))
+    return definition(DATASETS_RECIPE, position, URI)
+
+
+@pytest.mark.parametrize(
+    ("old", "offset", "line", "character"),
+    [
+        ("reference_dataset: ", 2, 1, 5),
+        ("reference_dataset: ", 4, 1, 5),
+        ("reference_dataset: ", 7, 6, 9),
+        ("alternative_dataset: ", 1, 2, 37),
+    ],
+)
+def test_definition_reference_dataset(
+    old: str,
+    offset: int,
+    line: int,
+    character: int,
+) -> None:
+    location = _dataset_definition(old, offset)
+    assert location is not None
+    assert location.range.start == types.Position(
+        line=line,
+        character=character,
+    )
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("dataset: model", "dataset: other"),
+        ("    scripts: null", "    scripts: ["),
+    ],
+)
+def test_definition_unknown_reference_dataset(old: str, new: str) -> None:
+    text = DATASETS_RECIPE.replace(old, new)
+    position = types.Position(line=11, character=30)
+    assert definition(text, position, URI) is None
+
+
+def test_definition_of_other_value() -> None:
+    assert _dataset_definition("mip: ", 1) is None
+
+
+@pytest.mark.parametrize(
+    "start",
+    [
+        # With duplicate keys, the last value is loaded and the first is found.
+        "datasets: [{dataset: A}]\ndatasets: [{dataset: A}, {dataset: B}]\n",
+        "datasets: 1\ndatasets: [{dataset: B}]\n",
+        # The key that is merged into the variable group has no location.
+        "base: &base\n  additional_datasets: [{dataset: B}]\n",
+    ],
+)
+def test_definition_of_dataset_without_location(
+    split_cursor: SplitCursor,
+    start: str,
+) -> None:
+    merge = "<<: *base" if "base" in start else "mip: Amon"
+    text, position = split_cursor(
+        start
+        + dedent(f"""\
+            diagnostics:
+              diag:
+                variables:
+                  pr:
+                    {merge}
+                    reference_dataset: |B
+                scripts: null
+            """),
+    )
+    assert definition(text, position, URI) is None
+
+
+def test_complete_reference_dataset(split_cursor: SplitCursor) -> None:
+    text, position = split_cursor(
+        DATASETS_RECIPE.replace("dataset: model", "dataset: |"),
+    )
+    items = completions(
+        text,
+        position,
+        yaml.safe_load(DATASETS_RECIPE),
+        recipe_schema(),
+    )
+    assert [item.label for item in items] == [
+        "ERA5",
+        "CESM2",
+        "model",
+        "MSWEP",
+        "GPCP-SG",
+    ]

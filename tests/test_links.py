@@ -24,6 +24,7 @@ from esmvalcore.config import CFG
 from lsprotocol import types
 
 from esmvaltool_language_server import references, vocabulary
+from esmvaltool_language_server.errata import Erratum
 from esmvaltool_language_server.hover import hover
 from esmvaltool_language_server.schema import recipe_schema
 
@@ -350,4 +351,13 @@ def test_vocabulary_links(docs: dict[str, str]) -> None:
         links,
         {"docs.esmvaltool.org", "wcrp-cmip.github.io", "wcrp-cmip.org"},
     )
+    _assert_resolve(links, docs)
+
+
+def test_erratum_links(docs: dict[str, str]) -> None:
+    # The errata come from a web service, so use the link to a made up
+    # erratum: the page is the same for every erratum.
+    erratum = Erratum(uid="x", title="t", status="new", datasets=())
+    links = {erratum.url}
+    _assert_found(links, {"errata.esgf.io"})
     _assert_resolve(links, docs)

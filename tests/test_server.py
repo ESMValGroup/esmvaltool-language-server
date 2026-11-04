@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import sys
+import threading
 from concurrent.futures import Future
 from typing import TYPE_CHECKING
 
@@ -15,7 +16,7 @@ from pygls.workspace import Workspace
 from esmvaltool_language_server import server
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Iterator
     from pathlib import Path
 
 TIMEOUT = 60
@@ -349,6 +350,332 @@ async def test_populate_datasets_progress(
         types.WorkDoneProgressBegin,
         types.WorkDoneProgressEnd,
     ]
+
+
+_ERRATUM = types.Diagnostic(
+    range=types.Range(
+        start=types.Position(line=1, character=2),
+        end=types.Position(line=1, character=8),
+    ),
+    message="An erratum",
+)
+
+_ERRATA_RECIPE = (
+    "datasets:\n  - {project: CMIP6, dataset: CESM2}\ndiagnostics: {}\n"
+)
+
+
+def _errata_server(
+    monkeypatch: pytest.MonkeyPatch,
+    release: threading.Event,
+) -> tuple[server.RecipeLanguageServer, list[types.PublishDiagnosticsParams]]:
+    """Create a server with a recipe and errata that wait for an event."""
+    ls = server.RecipeLanguageServer()
+    ls.protocol._workspace = Workspace(None)
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri="file:///recipe_test.yml",
+            language_id="yaml",
+            version=1,
+            text=_ERRATA_RECIPE,
+        ),
+    )
+    published: list[types.PublishDiagnosticsParams] = []
+    monkeypatch.setattr(
+        ls,
+        "text_document_publish_diagnostics",
+        published.append,
+    )
+    monkeypatch.setattr(ls, "window_show_message", lambda _: None)
+
+    def errata_diagnostics(*_: object) -> Iterator[list[types.Diagnostic]]:
+        release.wait(TIMEOUT)
+        yield [_ERRATUM]
+
+    monkeypatch.setattr(server, "errata_diagnostics", errata_diagnostics)
+    return ls, published
+
+
+async def _wait_for(published: list[types.PublishDiagnosticsParams]) -> None:
+    for _ in range(TIMEOUT * 100):
+        if published:
+            return
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_errata_are_published_after_the_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    ls, published = _errata_server(monkeypatch, release)
+    task = asyncio.create_task(ls._check("file:///recipe_test.yml", 0))
+    await _wait_for(published)
+    assert len(published) == 1
+    assert _ERRATUM not in published[0].diagnostics
+    release.set()
+    await task
+    assert len(published) == 2
+    assert published[1].version == 1
+    assert published[1].diagnostics[-1] == _ERRATUM
+    assert published[1].diagnostics[:-1] == published[0].diagnostics
+
+
+@pytest.mark.asyncio
+async def test_errata_are_not_published_for_changed_recipe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    ls, published = _errata_server(monkeypatch, release)
+    task = asyncio.create_task(ls._check("file:///recipe_test.yml", 0))
+    await _wait_for(published)
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri="file:///recipe_test.yml",
+            language_id="yaml",
+            version=2,
+            text=_ERRATA_RECIPE,
+        ),
+    )
+    release.set()
+    await task
+    assert len(published) == 1
+
+
+@pytest.mark.asyncio
+async def test_errata_can_be_turned_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    release.set()
+    ls, published = _errata_server(monkeypatch, release)
+    ls.errata_enabled = False
+    await ls._check("file:///recipe_test.yml", 0)
+    assert len(published) == 1
+
+
+@pytest.mark.asyncio
+async def test_errata_are_published_as_they_are_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls, published = _errata_server(monkeypatch, threading.Event())
+    other = types.Diagnostic(range=_ERRATUM.range, message="Other erratum")
+    updates = [[], [_ERRATUM], [_ERRATUM], [_ERRATUM, other]]
+    monkeypatch.setattr(server, "errata_diagnostics", lambda *_: iter(updates))
+    await ls._check("file:///recipe_test.yml", 0)
+    assert len(published) == 3
+    assert published[1].diagnostics[-1] == _ERRATUM
+    assert published[2].diagnostics[-2:] == [_ERRATUM, other]
+
+
+@pytest.mark.asyncio
+async def test_new_check_cancels_looking_up_errata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    ls, published = _errata_server(monkeypatch, release)
+    ls.schedule_check("file:///recipe_test.yml")
+    first = ls.pending["file:///recipe_test.yml"]
+    await _wait_for(published)
+    ls.schedule_check("file:///recipe_test.yml")
+    with contextlib.suppress(asyncio.CancelledError):
+        await first
+    assert first.cancelled()
+    release.set()
+    await ls.pending["file:///recipe_test.yml"]
+    assert "file:///recipe_test.yml" not in ls.pending
+
+
+@pytest.mark.asyncio
+async def test_errata_are_looked_up_in_their_own_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls, _ = _errata_server(monkeypatch, threading.Event())
+    threads = []
+
+    def errata_diagnostics(*_: object) -> Iterator[list[types.Diagnostic]]:
+        threads.append(threading.current_thread().name)
+        yield []
+
+    monkeypatch.setattr(server, "errata_diagnostics", errata_diagnostics)
+    await ls._check("file:///recipe_test.yml", 0)
+    assert threads[0].startswith("errata")
+
+
+@pytest.mark.asyncio
+async def test_errata_stay_on_the_screen_until_all_are_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls, published = _errata_server(monkeypatch, threading.Event())
+    uri = "file:///recipe_test.yml"
+    other = types.Diagnostic(range=_ERRATUM.range, message="Other erratum")
+    monkeypatch.setattr(
+        server,
+        "errata_diagnostics",
+        lambda *_: iter([[_ERRATUM]]),
+    )
+    await ls._check(uri, 0)
+    published.clear()
+    monkeypatch.setattr(
+        server,
+        "errata_diagnostics",
+        lambda *_: iter([[], [other]]),
+    )
+    await ls._check(uri, 0)
+    assert [p.diagnostics[-1] for p in published] == [_ERRATUM, other]
+    assert _ERRATUM not in published[-1].diagnostics
+
+
+@pytest.mark.asyncio
+async def test_errata_stay_on_the_screen_if_the_service_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls, published = _errata_server(monkeypatch, threading.Event())
+    uri = "file:///recipe_test.yml"
+    monkeypatch.setattr(
+        server,
+        "errata_diagnostics",
+        lambda *_: iter([[_ERRATUM]]),
+    )
+    await ls._check(uri, 0)
+    published.clear()
+
+    def errata_diagnostics(*_: object) -> Iterator[list[types.Diagnostic]]:
+        ls.errata.failed = True
+        yield []
+
+    monkeypatch.setattr(server, "errata_diagnostics", errata_diagnostics)
+    await ls._check(uri, 0)
+    assert [p.diagnostics[-1] for p in published] == [_ERRATUM]
+
+
+@pytest.mark.asyncio
+async def test_errata_are_removed_if_it_is_not_a_recipe_anymore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls, published = _errata_server(monkeypatch, threading.Event())
+    uri = "file:///recipe_test.yml"
+    monkeypatch.setattr(
+        server,
+        "errata_diagnostics",
+        lambda *_: iter([[_ERRATUM]]),
+    )
+    await ls._check(uri, 0)
+    published.clear()
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri=uri,
+            language_id="yaml",
+            version=2,
+            text="package: {name: test}\n",
+        ),
+    )
+    await ls._check(uri, 0)
+    assert [p.diagnostics for p in published] == [[]]
+    assert uri not in ls.errata_shown
+
+
+@pytest.mark.asyncio
+async def test_errata_stay_on_the_screen_while_yaml_is_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls, published = _errata_server(monkeypatch, threading.Event())
+    uri = "file:///recipe_test.yml"
+    monkeypatch.setattr(
+        server,
+        "errata_diagnostics",
+        lambda *_: iter([[_ERRATUM]]),
+    )
+    await ls._check(uri, 0)
+    published.clear()
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri=uri,
+            language_id="yaml",
+            version=2,
+            text="datasets: [\n",
+        ),
+    )
+    await ls._check(uri, 0)
+    assert published[-1].diagnostics[-1].message == _ERRATUM.message
+
+
+@pytest.mark.asyncio
+async def test_user_is_warned_once_about_missing_errata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls, _ = _errata_server(monkeypatch, threading.Event())
+    messages: list[types.ShowMessageParams] = []
+    monkeypatch.setattr(ls, "window_show_message", messages.append)
+
+    def errata_diagnostics(*_: object) -> Iterator[list[types.Diagnostic]]:
+        ls.errata.failed = True
+        yield []
+
+    monkeypatch.setattr(server, "errata_diagnostics", errata_diagnostics)
+    await ls._check("file:///recipe_test.yml", 0)
+    await ls._check("file:///recipe_test.yml", 0)
+    assert [m.type for m in messages] == [types.MessageType.Warning]
+
+
+@pytest.mark.asyncio
+async def test_failure_to_find_errata_keeps_the_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ls, published = _errata_server(monkeypatch, threading.Event())
+
+    def errata_diagnostics(*_: object) -> list[types.Diagnostic]:
+        msg = "unexpected answer"
+        raise TypeError(msg)
+
+    monkeypatch.setattr(server, "errata_diagnostics", errata_diagnostics)
+    await ls._check("file:///recipe_test.yml", 0)
+    assert len(published) == 1
+    assert "Failed to find errata" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("options", "enabled"),
+    [
+        (None, True),
+        ({}, True),
+        ({"errata": True}, True),
+        ({"errata": False}, False),
+    ],
+)
+def test_initialization_option_turns_off_errata(
+    options: dict[str, bool] | None,
+    *,
+    enabled: bool,
+) -> None:
+    ls = server.RecipeLanguageServer()
+    params = types.InitializeParams(
+        capabilities=types.ClientCapabilities(),
+        initialization_options=options,
+    )
+    server.initialize(ls, params)
+    assert ls.errata_enabled is enabled
+
+
+@pytest.mark.asyncio
+async def test_no_errata_for_other_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    release.set()
+    ls, published = _errata_server(monkeypatch, release)
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri="file:///recipe_test.yml",
+            language_id="yaml",
+            version=1,
+            text="package:\n  name: example\n",
+        ),
+    )
+    await ls._check("file:///recipe_test.yml", 0)
+    assert len(published) == 1
+    assert _ERRATUM not in published[0].diagnostics
 
 
 def test_check_document_ignores_other_files() -> None:
