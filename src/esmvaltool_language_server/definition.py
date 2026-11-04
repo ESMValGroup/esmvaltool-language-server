@@ -124,12 +124,9 @@ def _find_key(node: yaml.Node | None, path: Path) -> yaml.Node | None:
     key_node = None
     for part in path:
         if isinstance(part, int):
-            # The path was found in the same text, so the item exists.
-            node = (
-                node.value[part]
-                if isinstance(node, yaml.SequenceNode)
-                else None
-            )
+            # With duplicate keys, this may not be the list the path is from.
+            items = node.value if isinstance(node, yaml.SequenceNode) else []
+            node = items[part] if part < len(items) else None
             continue
         if not isinstance(node, yaml.MappingNode):
             return None

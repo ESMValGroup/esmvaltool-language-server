@@ -687,6 +687,40 @@ def test_definition_unknown_reference_dataset(old: str, new: str) -> None:
     assert definition(text, position, URI) is None
 
 
+def test_definition_of_other_value() -> None:
+    assert _dataset_definition("mip: ", 1) is None
+
+
+@pytest.mark.parametrize(
+    "start",
+    [
+        # With duplicate keys, the last value is loaded and the first is found.
+        "datasets: [{dataset: A}]\ndatasets: [{dataset: A}, {dataset: B}]\n",
+        "datasets: 1\ndatasets: [{dataset: B}]\n",
+        # The key that is merged into the variable group has no location.
+        "base: &base\n  additional_datasets: [{dataset: B}]\n",
+    ],
+)
+def test_definition_of_dataset_without_location(
+    split_cursor: SplitCursor,
+    start: str,
+) -> None:
+    merge = "<<: *base" if "base" in start else "mip: Amon"
+    text, position = split_cursor(
+        start
+        + dedent(f"""\
+            diagnostics:
+              diag:
+                variables:
+                  pr:
+                    {merge}
+                    reference_dataset: |B
+                scripts: null
+            """),
+    )
+    assert definition(text, position, URI) is None
+
+
 def test_complete_reference_dataset(split_cursor: SplitCursor) -> None:
     text, position = split_cursor(
         DATASETS_RECIPE.replace("dataset: model", "dataset: |"),
