@@ -32,7 +32,7 @@ DEBOUNCE_SECONDS = 0.3
 
 # Wait this long for the values of a facet to be found on ESGF before
 # suggesting other values.
-FACET_SEARCH_SECONDS = 2.0
+FACET_SEARCH_SECONDS = 5.0
 
 
 class RecipeLanguageServer(LanguageServer):
