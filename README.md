@@ -25,31 +25,19 @@ authors and references it defines.
   branding suffixes of the variable; the preprocessors and tasks defined in the recipe; and, if
   ESMValTool is installed, its diagnostic scripts, authors, and references.
   Keys are inserted with the arguments they require or their default value.
-- Completion of the facets of datasets, such as `dataset`, `exp`, and
-  `ensemble`, with the values of the available datasets that match the other
-  facets of the variable and dataset, including its supplementary variables.
+- Completion of the facets of datasets, such as `dataset`, `exp`, `ensemble`,
+  `timerange`, `start_year`, and `end_year`, with the values of the available
+  datasets that match the other facets of the variable and dataset, including
+  its supplementary variables.
   The values are found on the ESGF indices that are enabled in the
   [intake-esgf configuration](https://intake-esgf.readthedocs.io/en/latest/configure.html),
   so the facets in the recipe are sent to these indices, and in the other
   data sources that are configured in ESMValCore, such as local directories.
   The facets of the other data sources that can be completed are those in
   the templates of their paths.
-  The time range of the data, `timerange`, `start_year`, and `end_year`, is
-  completed from the dates of the files in the other data sources, from the
-  names of the files on the Globus indices of ESGF, from the dates of the
-  files of up to 100 datasets on the STAC indices of ESGF, and from the most
-  common first and last year of the datasets on the Solr indices of ESGF.
-  Globus indices also use these years if the dates cannot be read from the
-  names of the files, as in many CMIP3 files, or if there are more than 5000
-  files.
-  The time ranges on ESGF are only suggested once the experiment is given.
-  The time ranges of a list of experiments are joined, like ESMValCore
-  does, and time ranges with years without data are split, because
-  ESMValCore stops if there is no data for a year.
-  The time ranges of a variable group are the parts that its datasets with
-  known time ranges have in common.
-  Time ranges are given in years or months if the data covers whole years
-  or months, and with the day otherwise.
+  `timerange`, `start_year`, and `end_year` are only completed from ESGF once
+  `exp` is given.
+  The accuracy of the values depends on the metadata provided by ESGF.
   Finding the values usually takes less than a second; until then, the values
   that the recipe schema allows are suggested.
   The values are remembered for 2 hours, or for 10 minutes if an index or
