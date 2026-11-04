@@ -72,6 +72,9 @@ _MAX_DATASETS = 100
 # Errors when an index cannot be reached or gives an unexpected answer.
 _ERRORS = (requests.RequestException, globus_sdk.GlobusError, LookupError)
 
+# The number of requests that failed, by source of the data.
+_FAILURES: Counter[str] = Counter()
+
 # The prefix that ESMValCore adds to the version of a dataset on ESGF.
 _VERSION_PREFIX = "v"
 
@@ -136,6 +139,32 @@ class _Mapping:
             if theirs == value:
                 return ours
         return value
+
+
+def record_failure(source: object) -> None:
+    """Remember that a search of a source of data failed.
+
+    Parameters
+    ----------
+    source:
+        The source of the data.
+    """
+    _FAILURES[str(source)] += 1
+
+
+def failures() -> int:
+    """Get the number of failed searches of sources of data since the start.
+
+    A search that overlaps with a failed search cannot tell whether it was
+    affected itself, so comparing this number can only tell that a search may
+    have missed values.
+
+    Returns
+    -------
+    :
+        The number of failed searches.
+    """
+    return _FAILURES.total()
 
 
 @functools.cache
@@ -367,6 +396,7 @@ def _index_values(
         logger.warning(
             "Failed to get the values of %s from %s: %s", field, index, exc
         )
+        record_failure(index)
         return {}
 
 
@@ -627,6 +657,7 @@ def _index_ranges(
         return _stac_ranges(index, query, experiment)
     except _ERRORS as exc:
         logger.warning("Failed to get the dates from %s: %s", index, exc)
+        record_failure(index)
         return []
 
 

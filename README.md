@@ -52,7 +52,12 @@ authors and references it defines.
   or months, and with the day otherwise.
   Finding the values usually takes less than a second; until then, the values
   that the recipe schema allows are suggested.
-  The values are remembered for 2 hours.
+  The values are remembered for 2 hours, or for 10 minutes if an index or
+  other data source could not be searched.
+  To get suggestions for local files that you added while editing a recipe,
+  restart the language server: in Visual Studio Code, run
+  **ESMValTool: Restart Language Server** from the command palette; in Emacs,
+  run `M-x eglot-reconnect`.
 - Documentation of preprocessor functions and other keys, their values, and
   preprocessors, with default values, when you hover over them.
   Hovering over the value of a facet, such as `dataset`, `exp`,

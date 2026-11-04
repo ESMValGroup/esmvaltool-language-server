@@ -81,6 +81,7 @@ def _search(
                 facet,
                 getattr(source, "__name__", source),
             )
+            esgf.record_failure(source)
             return []
 
     with ThreadPoolExecutor(max_workers=len(sources)) as pool:
@@ -94,10 +95,19 @@ class FacetSearch:
     ----------
     max_age:
         Search again after this many seconds.
+    retry_age:
+        Search again after this many seconds if a source of the values could
+        not be searched.
     """
 
-    def __init__(self, max_age: float = 2 * 60 * 60) -> None:
+    def __init__(
+        self,
+        max_age: float = 2 * 60 * 60,
+        retry_age: float = 10 * 60,
+    ) -> None:
         self.max_age = max_age
+        self.retry_age = retry_age
+        self._incomplete: set[Hashable] = set()
         self._executor = ThreadPoolExecutor(max_workers=4)
         self._searches: dict[Hashable, tuple[float, Future[list[str]]]] = {}
 
@@ -134,19 +144,41 @@ class FacetSearch:
         known -= {facet, "project"}
         relevant = {k: v for k, v in facets.items() if k in known}
         key = (project, facet, repr(sorted(relevant.items(), key=str)))
-        now = time.monotonic()
-        self._searches = {
-            k: (start, future)
-            for k, (start, future) in self._searches.items()
-            if now - start < self.max_age or not future.done()
-        }
+        self._remove_expired()
         if key not in self._searches:
             future = self._executor.submit(
-                _search,
+                self._find,
+                key,
                 sources,
                 project,
                 relevant,
                 facet,
             )
-            self._searches[key] = (now, future)
+            self._searches[key] = (time.monotonic(), future)
         return self._searches[key][1]
+
+    def _remove_expired(self) -> None:
+        """Forget the searches that have finished too long ago."""
+        now = time.monotonic()
+        for key, (start, future) in list(self._searches.items()):
+            max_age = (
+                self.retry_age if key in self._incomplete else self.max_age
+            )
+            if now - start >= max_age and future.done():
+                del self._searches[key]
+                self._incomplete.discard(key)
+
+    def _find(
+        self,
+        key: Hashable,
+        sources: list[_Source],
+        project: str,
+        facets: Mapping[object, object],
+        facet: str,
+    ) -> list[str]:
+        """Search and remember if a source could not be searched."""
+        failures = esgf.failures()
+        values = _search(sources, project, facets, facet)
+        if esgf.failures() != failures:
+            self._incomplete.add(key)
+        return values

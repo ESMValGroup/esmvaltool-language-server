@@ -722,3 +722,24 @@ def test_globus_time_values_only_on_stac(
     _use_globus(monkeypatch, client)
     assert not esgf.is_searchable(project, "timerange")
     assert not client.requests
+
+
+def test_failed_requests_are_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_globus(monkeypatch, _GlobusClient({}))
+    before = esgf.failures()
+    facets = {"exp": "ssp585"}
+    assert esgf.facet_values("CMIP6", facets, "timerange") == []
+    assert esgf.failures() == before + 1
+    assert esgf.facet_values("CMIP6", facets, "dataset") == []
+    assert esgf.failures() == before + 2
+
+
+def test_successful_requests_are_not_recorded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _use_globus(monkeypatch, _GlobusFiles({}))
+    before = esgf.failures()
+    assert esgf.facet_values("CMIP6", {"exp": "ssp585"}, "timerange") == []
+    assert esgf.failures() == before
