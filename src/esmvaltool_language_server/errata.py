@@ -310,22 +310,18 @@ def find_errata(
     ]
 
 
-def _node_at(node: yaml.Node | None, path: Path) -> yaml.Node | None:
-    """Find the node at a path in a YAML document."""
+def _node_at(root: yaml.Node, path: Path) -> yaml.Node:
+    """Find the node of the data at a path in the document with that data."""
+    loader = yaml.SafeLoader("")
+    node = root
     for part in path:
-        if isinstance(node, yaml.MappingNode) and isinstance(part, str):
-            node = next(
-                (
-                    v
-                    for k, v in node.value
-                    if getattr(k, "value", None) == part
-                ),
-                None,
-            )
-        elif isinstance(node, yaml.SequenceNode) and isinstance(part, int):
-            node = node.value[part] if part < len(node.value) else None
+        if isinstance(part, int):
+            node = node.value[part]
         else:
-            return None
+            # Like when loading a document, the last key takes precedence and
+            # merged keys come before the other keys.
+            loader.flatten_mapping(node)
+            node = next(v for k, v in reversed(node.value) if k.value == part)
     return node
 
 
@@ -362,26 +358,24 @@ def errata_diagnostics(
     except yaml.YAMLError:
         return []
     lines = text.splitlines()
-    diagnostics = []
+    # An alias or merge key can make a dataset part of several paths.
+    diagnostics: dict[tuple[int, int, str, str], types.Diagnostic] = {}
     for path, erratum, variables in find_errata(recipe, service):
         node = _node_at(root, path)
-        if node is None:
-            continue
         line, column = node.start_mark.line, node.start_mark.column
+        message = _message(erratum, variables)
         end = len(lines[line].rstrip()) if line < len(lines) else column
-        diagnostics.append(
-            types.Diagnostic(
-                range=types.Range(
-                    start=types.Position(line=line, character=column),
-                    end=types.Position(line=line, character=max(end, column)),
-                ),
-                message=_message(erratum, variables),
-                severity=types.DiagnosticSeverity.Warning
-                if erratum.status in _OPEN
-                else types.DiagnosticSeverity.Information,
-                code="erratum",
-                code_description=types.CodeDescription(href=erratum.url),
-                source=SOURCE,
+        diagnostics[(line, column, erratum.uid, message)] = types.Diagnostic(
+            range=types.Range(
+                start=types.Position(line=line, character=column),
+                end=types.Position(line=line, character=max(end, column)),
             ),
+            message=message,
+            severity=types.DiagnosticSeverity.Warning
+            if erratum.status in _OPEN
+            else types.DiagnosticSeverity.Information,
+            code="erratum",
+            code_description=types.CodeDescription(href=erratum.url),
+            source=SOURCE,
         )
-    return diagnostics
+    return list(diagnostics.values())

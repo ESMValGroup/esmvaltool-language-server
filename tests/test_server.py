@@ -317,6 +317,23 @@ async def test_errata_can_be_turned_off(
     assert len(published) == 1
 
 
+@pytest.mark.asyncio
+async def test_failure_to_find_errata_keeps_the_diagnostics(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    ls, published = _errata_server(monkeypatch, threading.Event())
+
+    def errata_diagnostics(*_: object) -> list[types.Diagnostic]:
+        msg = "unexpected answer"
+        raise TypeError(msg)
+
+    monkeypatch.setattr(server, "errata_diagnostics", errata_diagnostics)
+    await ls._check("file:///recipe_test.yml", 0)
+    assert len(published) == 1
+    assert "Failed to find errata" in caplog.text
+
+
 @pytest.mark.parametrize(
     ("options", "enabled"),
     [

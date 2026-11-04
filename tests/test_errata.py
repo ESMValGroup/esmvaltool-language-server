@@ -302,3 +302,90 @@ def test_errata_per_variable_group(monkeypatch: pytest.MonkeyPatch) -> None:
         (9, "Problem some (affects tas, ta)"),
         (9, "Problem all"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("text", "line"),
+    [
+        pytest.param(
+            "diagnostics:\n"
+            "  diag:\n"
+            "    variables:\n"
+            "      tas: &tas\n"
+            "        project: CMIP6\n"
+            "        additional_datasets:\n"
+            "          - {dataset: CESM2}\n"
+            "      pr:\n"
+            "        <<: *tas\n",
+            6,
+            id="variable group",
+        ),
+        pytest.param(
+            "defaults: &defaults\n"
+            "  additional_datasets:\n"
+            "    - {project: CMIP6, dataset: CESM2}\n"
+            "diagnostics:\n"
+            "  diag:\n"
+            "    <<: *defaults\n"
+            "    variables:\n"
+            "      pr: {mip: Amon}\n",
+            2,
+            id="diagnostic",
+        ),
+        pytest.param(
+            "first: &first\n"
+            "  additional_datasets:\n"
+            "    - {project: CMIP6, dataset: CESM2}\n"
+            "second: &second\n"
+            "  additional_datasets:\n"
+            "    - {project: CMIP6, dataset: CESM2, exp: historical}\n"
+            "diagnostics:\n"
+            "  diag:\n"
+            "    <<: [*first, *second]\n"
+            "    variables:\n"
+            "      pr: {mip: Amon}\n",
+            2,
+            id="first of several merged mappings",
+        ),
+        pytest.param(
+            "defaults: &defaults\n"
+            "  additional_datasets:\n"
+            "    - {project: CMIP6, dataset: CESM2, exp: ssp585}\n"
+            "diagnostics:\n"
+            "  diag:\n"
+            "    <<: *defaults\n"
+            "    additional_datasets:\n"
+            "      - {project: CMIP6, dataset: CESM2, exp: historical}\n"
+            "    variables:\n"
+            "      pr: {mip: Amon}\n",
+            7,
+            id="key that overrides a merged key",
+        ),
+    ],
+)
+def test_errata_of_merged_datasets(
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+    line: int,
+) -> None:
+    issue = _issue(datasets=(CESM2.replace(".tas.", ".pr."),))
+    service = _service(monkeypatch, _Session([issue]))
+    found = errata.errata_diagnostics(text, yaml.safe_load(text), service)
+    assert [d.range.start.line for d in found] == [line]
+
+
+def test_erratum_of_aliased_datasets_is_shown_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = (
+        "datasets: &datasets\n"
+        "  - {project: CMIP6, dataset: CESM2}\n"
+        "diagnostics:\n"
+        "  first:\n"
+        "    additional_datasets: *datasets\n"
+        "    variables:\n"
+        "      tas: {mip: Amon}\n"
+    )
+    service = _service(monkeypatch, _Session([_issue()]))
+    found = errata.errata_diagnostics(text, yaml.safe_load(text), service)
+    assert [d.range.start.line for d in found] == [1]
