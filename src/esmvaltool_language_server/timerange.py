@@ -28,6 +28,9 @@ _LAST_DAY = 30
 _FEBRUARY = 2
 _LAST_DAY_FEBRUARY = 28
 
+# The length of an ISO 8601 time without fractions of a second or time zone.
+_ISO_DATETIME_LENGTH = 19
+
 
 def _year(date: str) -> str | None:
     """Get the year of a date that starts with a four digit year."""
@@ -51,13 +54,20 @@ def from_iso(start: str, end: str) -> tuple[str, str] | None:
     -------
     :
         The years. An end at the start of a year is the end of the previous
-        year. ``None`` if the times cannot be read.
+        year. ``None`` if the times cannot be read. Time zones are ignored.
     """
     try:
-        first, last = (dt.datetime.fromisoformat(t) for t in (start, end))
+        first, last = (
+            dt.datetime.fromisoformat(t[:_ISO_DATETIME_LENGTH])
+            for t in (start, end)
+        )
     except ValueError:
         return None
-    if first < last == dt.datetime(last.year, 1, 1, tzinfo=last.tzinfo):
+    if (
+        first
+        < last
+        == last.replace(month=1, day=1, hour=0, minute=0, second=0)
+    ):
         last -= dt.timedelta(seconds=1)
     return f"{first.year:04d}", f"{last.year:04d}"
 
@@ -87,6 +97,22 @@ def _range(start: str, end: str) -> str:
     if start[_YEAR_DIGITS:] in ("", "01") and end[_YEAR_DIGITS:] in ("", "12"):
         return f"{_year(start)}/{_year(end)}"
     return f"{start}/{end}"
+
+
+def join(ranges: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Join the time ranges of the experiments of a dataset.
+
+    Like the check of the data availability of ESMValCore, years without
+    data are gaps, so time ranges are only joined if there is no year
+    between them, and a time range is suggested for each part.
+    """
+    joined: list[tuple[str, str]] = []
+    for start, end in sorted(ranges):
+        if joined and int(start[:4]) <= int(joined[-1][1][:4]) + 1:
+            joined[-1] = (joined[-1][0], max(joined[-1][1], end))
+        else:
+            joined.append((start, end))
+    return joined
 
 
 def suggestions(facet: str, ranges: Iterable[tuple[str, str]]) -> list[str]:
@@ -124,7 +150,8 @@ def suggestions(facet: str, ranges: Iterable[tuple[str, str]]) -> list[str]:
 def _dates(value: str) -> tuple[str, str] | None:
     """Get the first and last day of a time range from :func:`suggestions`.
 
-    The last day of a month is that in the standard calendar.
+    The last day of a month is that in the standard calendar. Dates that
+    cannot be read give ``None``.
     """
     start, slash, end = value.partition("/")
     if not (slash and start.isdigit() and end.isdigit()):
@@ -135,7 +162,10 @@ def _dates(value: str) -> tuple[str, str] | None:
         end = f"{end.zfill(_YEAR_DIGITS)}12"
     if len(end) == _MONTH_DIGITS:
         year, month = int(end[:_YEAR_DIGITS]), int(end[_YEAR_DIGITS:])
-        end += f"{calendar.monthrange(year, month)[1]:02d}"
+        try:
+            end += f"{calendar.monthrange(year, month)[1]:02d}"
+        except ValueError:
+            return None
     return f"{start}01"[:_DAY_DIGITS], end[:_DAY_DIGITS]
 
 

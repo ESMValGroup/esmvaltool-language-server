@@ -88,6 +88,8 @@ def test_suggestions_without_ranges() -> None:
         ("timerange", [["*", "1850/2014"], []], ["*", "1850/2014"]),
         ("timerange", [["*", "1850/1900"], ["*", "1950/2014"]], []),
         ("timerange", [], []),
+        # Dates that cannot be read are ignored.
+        ("timerange", [["185001/185000"], ["1850/2014"]], ["*", "1850/2014"]),
         ("start_year", [["*", "1850/2014"], ["*", "1900/2021"]], ["1900"]),
         ("end_year", [["*", "1850/2014"], ["*", "1900/2021"]], ["2014"]),
     ],
@@ -111,6 +113,9 @@ def test_overlap(
         # A single time.
         ("1850-01-01T00:00:00Z", "1850-01-01T00:00:00Z", ("1850", "1850")),
         ("unknown", "2014-12-16T12:00:00Z", None),
+        # Time zones and fractions of a second are ignored.
+        ("1850-01-16T12:00:00Z", "2015-01-01T00:00:00", ("1850", "2014")),
+        ("1850-01-16T12:00:00.000Z", "2014-12-16", ("1850", "2014")),
     ],
 )
 def test_from_iso(
@@ -119,3 +124,23 @@ def test_from_iso(
     expected: tuple[str, str] | None,
 ) -> None:
     assert timerange.from_iso(start, end) == expected
+
+
+@pytest.mark.parametrize(
+    ("ranges", "expected"),
+    [
+        ([], []),
+        ([("1850", "2014"), ("2015", "2100")], [("1850", "2100")]),
+        ([("185001", "201412"), ("201406", "210012")], [("185001", "210012")]),
+        ([("1850", "2100"), ("1900", "1950")], [("1850", "2100")]),
+        (
+            [("2016", "2100"), ("1850", "2014")],
+            [("1850", "2014"), ("2016", "2100")],
+        ),
+    ],
+)
+def test_join(
+    ranges: list[tuple[str, str]],
+    expected: list[tuple[str, str]],
+) -> None:
+    assert timerange.join(ranges) == expected

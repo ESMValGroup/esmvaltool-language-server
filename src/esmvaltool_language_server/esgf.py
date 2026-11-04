@@ -190,7 +190,7 @@ def intake_esgf_mapping(project: str) -> _Mapping | None:
 
 
 def _solr_mapping(project: str) -> _Mapping | None:
-    if project not in FACETS or project in _ONLY_ON_STAC:
+    if project not in FACETS:
         return None
     return _Mapping(
         {"project": "project", **FACETS[project], "version": "version"},
@@ -199,6 +199,8 @@ def _solr_mapping(project: str) -> _Mapping | None:
 
 
 def _mapping(index: Index, project: str) -> _Mapping | None:
+    if project in _ONLY_ON_STAC and not isinstance(index, STACESGFIndex):
+        return None
     if isinstance(index, SolrESGFIndex):
         return _solr_mapping(project)
     return intake_esgf_mapping(project)
@@ -218,6 +220,9 @@ def _indices() -> list[Index]:
             for name, enabled in intake_esgf.conf[kind].items()
             if enabled
         )
+    for index in indices:
+        if isinstance(index, GlobusESGFIndex):
+            index.client.transport.http_timeout = TIMEOUT
     return indices
 
 
@@ -425,6 +430,14 @@ def _stac_values(
         },
         timeout=TIMEOUT,
     )
+    # An index that cannot list its aggregations may not have this one.
+    if (
+        collection.aggregations is None
+        and requests.codes.bad_request
+        <= response.status_code
+        < requests.codes.server_error
+    ):
+        return {}
     response.raise_for_status()
     return {
         bucket["key"]: bucket["frequency"]
@@ -539,29 +552,8 @@ def facet_values(
 def _time_indices(project: str) -> list[Index]:
     """Get the enabled indices that know the dates of datasets of a project."""
     return [
-        index
-        for index in _indices()
-        if _mapping(index, project) is not None
-        and not (
-            isinstance(index, GlobusESGFIndex) and project in _ONLY_ON_STAC
-        )
+        index for index in _indices() if _mapping(index, project) is not None
     ]
-
-
-def _join(ranges: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Join the time ranges of the experiments of a dataset.
-
-    Like the check of the data availability of ESMValCore, years without
-    data are gaps, so time ranges are only joined if there is no year
-    between them, and a time range is suggested for each part.
-    """
-    joined: list[tuple[str, str]] = []
-    for start, end in sorted(ranges):
-        if joined and int(start[:4]) <= int(joined[-1][1][:4]) + 1:
-            joined[-1] = (joined[-1][0], max(joined[-1][1], end))
-        else:
-            joined.append((start, end))
-    return joined
 
 
 def _most_common(
@@ -598,7 +590,9 @@ def _dataset_ranges(
     queries = [
         {**query, experiment: [exp]} for exp in query.get(experiment, [])
     ] or [query]
-    return _join(r for q in queries if (r := most_common(q)) is not None)
+    return timerange.join(
+        r for q in queries if (r := most_common(q)) is not None
+    )
 
 
 def _globus_ranges(
@@ -628,7 +622,7 @@ def _globus_ranges(
         parts = match.string[: match.start()].split("_")
         key = tuple(part for part in parts if part not in differ)
         datasets.setdefault(key, []).append((match[1], match[2]))
-    return [r for found in datasets.values() for r in _join(found)]
+    return [r for found in datasets.values() for r in timerange.join(found)]
 
 
 def _dataset_key(item: dict[str, Any], names: Iterable[str]) -> str:
@@ -639,7 +633,7 @@ def _dataset_key(item: dict[str, Any], names: Iterable[str]) -> str:
     parts = str(item.get("id", "")).split(".")[:-1]
     differ = set()
     for name in names:
-        values = item["properties"].get(name, [])
+        values = item.get("properties", {}).get(name, [])
         differ.update(values if isinstance(values, list) else [values])
     return ".".join(p for p in parts if p not in differ)
 
@@ -688,7 +682,7 @@ def _stac_ranges(
     for item in response.json()["features"]:
         key = _dataset_key(item, differ)
         datasets.setdefault(key, []).extend(_file_ranges(item))
-    return [r for found in datasets.values() for r in _join(found)]
+    return [r for found in datasets.values() for r in timerange.join(found)]
 
 
 def _index_ranges(

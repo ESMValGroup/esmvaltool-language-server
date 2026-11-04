@@ -324,14 +324,17 @@ def _available_values(
             facets,
             "timerange" if is_time else facet,
         )
-        or []
         for facets in cmor.dataset_facets(path[:-1], recipe)
         if cmor.is_name(project := facets.get("project"))
     ]
+    known = [values for values in found if values is not None]
     if is_time:
-        # The time range of a variable group applies to all its datasets.
-        return timerange.overlap(facet, found)
-    return sorted(set().union(*found))
+        # The time range of a variable group applies to all its datasets, so
+        # wait for the searches of all datasets.
+        return (
+            timerange.overlap(facet, known) if len(known) == len(found) else []
+        )
+    return sorted(set().union(*known))
 
 
 def _typed(value: str, allowed: set[str]) -> object:

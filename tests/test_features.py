@@ -287,6 +287,21 @@ def test_time_range_of_all_datasets() -> None:
     assert values == ["*", "1850/2014", "185006/185012"]
 
 
+def test_time_range_waits_for_all_datasets() -> None:
+    """A time range is not suggested before all datasets are known."""
+    recipe = {
+        "datasets": [{"project": "CMIP6"}, {"project": "CMIP7"}],
+        "diagnostics": {"diag": {"variables": {"tas": {}}}},
+    }
+    path = ("diagnostics", "diag", "variables", "tas", "timerange")
+    values = completion._available_values(
+        path,
+        recipe,
+        lambda project, *_: ["*", "1850/2100"] if project == "CMIP6" else None,
+    )
+    assert values == []
+
+
 def test_complete_branding_suffix_available(
     split_cursor: SplitCursor,
 ) -> None:

@@ -195,12 +195,11 @@ def facet_values(
 
 
 def _time_ranges(dataset: Dataset) -> Iterator[tuple[str, str]]:
-    """Get the first and last date of the files of each matching dataset."""
+    """Get the time ranges without missing years of each matching dataset."""
     for found in dataset.from_files():
         dates = [
             str(file.facets["timerange"]).split("/")
             for file in found.files
             if "timerange" in file.facets
         ]
-        if dates:
-            yield min(d[0] for d in dates), max(d[-1] for d in dates)
+        yield from timerange.join((d[0], d[-1]) for d in dates)

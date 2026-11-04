@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -112,3 +113,18 @@ def test_facet_values(
 def test_facet_values_not_searchable() -> None:
     assert files.facet_values("CMIP6", {"short_name": "tas"}, "dataset") == []
     assert files.facet_values("OBS6", {"short_name": "tas"}, "exp") == []
+
+
+def test_time_ranges_are_split_at_missing_years() -> None:
+    found = SimpleNamespace(
+        files=[
+            SimpleNamespace(facets={"timerange": "199501/199612"}),
+            SimpleNamespace(facets={"timerange": "199001/199112"}),
+            SimpleNamespace(facets={}),
+        ],
+    )
+    dataset = SimpleNamespace(from_files=lambda: [found])
+    assert list(files._time_ranges(dataset)) == [
+        ("199001", "199112"),
+        ("199501", "199612"),
+    ]

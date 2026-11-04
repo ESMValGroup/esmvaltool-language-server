@@ -199,7 +199,7 @@ async def completion(
     ) -> list[str] | None:
         future = ls.facet_search.submit(project, facets, facet)
         if future is None:
-            return None
+            return []
         if future.done():
             return future.result()
         pending.append(future)

@@ -19,6 +19,7 @@ class _Response:
     def __init__(self, data: object, status: int = 200) -> None:
         self.data = data
         self.status = status
+        self.status_code = status
 
     def raise_for_status(self) -> None:
         if self.status != 200:
@@ -121,7 +122,9 @@ def test_unknown_project_mapping() -> None:
 
 @pytest.mark.parametrize("project", ["CMIP7", "CORDEX-CMIP6"])
 def test_project_not_on_solr(project: str) -> None:
-    assert esgf._solr_mapping(project) is None
+    assert esgf._mapping(_index(SolrESGFIndex), project) is None
+    assert esgf._mapping(_index(GlobusESGFIndex), project) is None
+    assert esgf._mapping(_index(STACESGFIndex), project) is not None
 
 
 def test_solr_mapping() -> None:
@@ -275,6 +278,39 @@ def test_stac_values_without_list_of_aggregations(
         "A": 4,
     }
     assert stac_session.params[-1]["size"] == esgf._MAX_VALUES
+
+
+def test_stac_values_of_unknown_aggregation(stac_session: _Session) -> None:
+    url = "https://stac/collections/CMIP6"
+    stac_session.responses[f"{url}/aggregations"] = _Response("error", 500)
+    stac_session.responses[f"{url}/aggregate"] = _Response("error", 400)
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    assert esgf._stac_values(index, {"project": ["CMIP6"]}, "source_id") == {}
+    # A failure of the index is not the same as an unknown aggregation.
+    stac_session.responses[f"{url}/aggregate"] = _Response("error", 500)
+    with pytest.raises(requests.HTTPError):
+        esgf._stac_values(index, {"project": ["CMIP6"]}, "source_id")
+
+
+def test_dataset_key_without_properties() -> None:
+    assert esgf._dataset_key({"id": "a.b.v1"}, ["exp"]) == "a.b"
+
+
+def test_globus_index_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    for kind in ("solr_indices", "stac_indices"):
+        monkeypatch.setitem(esgf.intake_esgf.conf, kind, {})
+    monkeypatch.setitem(
+        esgf.intake_esgf.conf,
+        "globus_indices",
+        {"ESGF2-US-1.5-Catalog": True},
+    )
+    esgf._indices.cache_clear()
+    try:
+        (index,) = esgf._indices()
+    finally:
+        esgf._indices.cache_clear()
+    assert isinstance(index, GlobusESGFIndex)
+    assert index.client.transport.http_timeout == esgf.TIMEOUT
 
 
 def test_index_values_error(caplog: pytest.LogCaptureFixture) -> None:
@@ -586,26 +622,6 @@ def test_stac_time_values_of_experiments(stac_dates: _Session) -> None:
         "1850/2100",
         "2016/2100",
     ]
-
-
-@pytest.mark.parametrize(
-    ("ranges", "expected"),
-    [
-        ([], []),
-        ([("1850", "2014"), ("2015", "2100")], [("1850", "2100")]),
-        ([("185001", "201412"), ("201406", "210012")], [("185001", "210012")]),
-        ([("1850", "2100"), ("1900", "1950")], [("1850", "2100")]),
-        (
-            [("2016", "2100"), ("1850", "2014")],
-            [("1850", "2014"), ("2016", "2100")],
-        ),
-    ],
-)
-def test_join(
-    ranges: list[tuple[str, str]],
-    expected: list[tuple[str, str]],
-) -> None:
-    assert esgf._join(ranges) == expected
 
 
 def test_solr_time_values_of_experiments(
