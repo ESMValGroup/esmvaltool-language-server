@@ -76,21 +76,11 @@ authors and references it defines.
   `M-x eglot-reconnect`.
 - Errata of the datasets in a recipe, from the
   [ESGF errata service](https://errata.esgf.io), shown on the line of the
-  dataset: a warning if the erratum is new or on hold, and information if it
-  is resolved or will not be fixed.
-  The message is the title of the erratum, and its code links to the
-  description.
-  If an erratum applies to only some of the variables of a dataset, the
-  message names them.
-  A resolved erratum is only shown for a dataset with a `version` that is
-  affected, because the latest version is usually no longer affected.
-  To find them, the project, name, and experiment of each dataset in the recipe
-  are sent to the service; other facets, such as the version, are compared
-  locally with the affected datasets.
-  The errata are shown after the other problems, as they are found, which can
-  take up to a minute for a recipe with many models.
-  The answers of the service are kept for a day in the cache directory of the
-  user, and errata are left out if the service cannot be reached.
+  dataset with a link to the description.
+  Resolved errata are only shown for a dataset with an affected `version`.
+  To find them, the project, name, and experiment of each dataset are sent to
+  the service, which can take up to a minute for a recipe with many models.
+  The answers are kept for a day.
   Turn this off with the setting `esmvaltool.languageServer.errata` in Visual
   Studio Code, or with the initialization option `errata` in other editors.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
