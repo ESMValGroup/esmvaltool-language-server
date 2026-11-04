@@ -42,7 +42,7 @@ authors and references it defines.
   that the recipe schema allows are suggested.
   The values are remembered for 2 hours, or for 10 minutes if an index or
   other data source could not be searched.
-  To get suggestions for local files that you added while editing a recipe,
+  To get fresh suggestions, for example for local files that you just added,
   restart the language server: in Visual Studio Code, run
   **ESMValTool: Restart Language Server** from the command palette; in Emacs,
   run `M-x eglot-reconnect`.
