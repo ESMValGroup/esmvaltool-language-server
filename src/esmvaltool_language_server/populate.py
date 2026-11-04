@@ -20,6 +20,7 @@ from esmvalcore.dataset import Dataset, datasets_to_recipe
 from esmvalcore.recipe import format_recipe
 from lsprotocol import types
 
+from esmvaltool_language_server import timerange
 from esmvaltool_language_server.schema import data_at
 
 if TYPE_CHECKING:
@@ -49,8 +50,17 @@ def _is_pattern(value: object) -> bool:
     return isinstance(value, str) and bool(_PATTERN.match(value))
 
 
+def _patterns(entry: dict[object, object]) -> list[tuple[object, object]]:
+    """Get the patterns to replace: ESMValCore resolves time range patterns."""
+    return [
+        (facet, value)
+        for facet, value in entry.items()
+        if facet not in timerange.FACETS and _is_pattern(value)
+    ]
+
+
 def _has_patterns(entry: object) -> bool:
-    return isinstance(entry, dict) and any(map(_is_pattern, entry.values()))
+    return isinstance(entry, dict) and bool(_patterns(entry))
 
 
 def _list_paths(recipe: object) -> list[Path]:
@@ -164,8 +174,8 @@ def _expand(
     and only the datasets with data for every group are kept.
     """
     found: list[list[dict[object, object]]] = [[entry] for _ in groups]
-    patterns = [(k, v) for k, v in entry.items() if _is_pattern(v)]
-    for facet, pattern in sorted(patterns, key=lambda p: p[0] in _RANGES):
+    patterns = sorted(_patterns(entry), key=lambda p: p[0] in _RANGES)
+    for facet, pattern in patterns:
         futures = [
             [
                 (dataset, _submit(search, {**group, **dataset}, str(facet)))

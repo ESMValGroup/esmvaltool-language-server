@@ -199,3 +199,33 @@ def test_populate_skips_anchors_and_aliases() -> None:
 def test_populate_fails(text: str, message: str) -> None:
     with pytest.raises(SearchError, match=message):
         populate_edits(text, ("datasets",), _search)
+
+
+def test_time_range_patterns_are_kept() -> None:
+    # ESMValCore replaces the wildcards in timerange when it finds the data.
+    text = dedent("""\
+        datasets:
+          - {dataset: 'M*', project: CMIP6, timerange: '*'}
+          - {dataset: CESM2, project: CMIP6, timerange: '1990/*'}
+        diagnostics:
+          diag:
+            variables:
+              tas: {mip: Amon}
+        """)
+
+    def search(
+        project: str,
+        facets: Mapping[object, object],
+        facet: str,
+    ) -> Future[list[str]] | None:
+        if facet == "timerange":
+            future: Future[list[str]] = Future()
+            future.set_result(["*", "1850/2014", "1990/2014"])
+            return future
+        return _search(project, facets, facet)
+
+    edits = populate_edits(text, ("datasets",), search)
+
+    assert [edit.new_text for edit in edits] == [
+        "{dataset: MIROC6, project: CMIP6, timerange: '*'}",
+    ]
