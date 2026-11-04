@@ -6,7 +6,9 @@ ESGF: the values on ESGF are found much faster by
 :mod:`esmvaltool_language_server.esgf`.
 The facets that can be searched for are the
 :attr:`~esmvalcore.io.protocol.DataSource.searchable_facets` of the data
-sources.
+sources, for example the facets in the templates of the paths of
+:class:`esmvalcore.io.local.LocalDataSource`, and the facets that select the
+time range, from the time ranges of the files.
 """
 
 from __future__ import annotations
@@ -18,10 +20,11 @@ from esmvalcore.config import CFG
 from esmvalcore.dataset import Dataset
 from esmvalcore.io import load_data_sources
 
+from esmvaltool_language_server import timerange
 from esmvaltool_language_server.cmor import is_name
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterator, Mapping
 
     from esmvalcore.config import Session
     from esmvalcore.typing import FacetValue
@@ -98,8 +101,11 @@ def is_searchable(project: str, facet: str) -> bool:
     Returns
     -------
     :
-        Whether a data source can search for the facet.
+        Whether a data source can search for the facet or the facet selects
+        the time range of the data.
     """
+    if facet in timerange.FACETS:
+        return _session(project) is not None
     return facet not in _NOT_SEARCHABLE and facet in known_facets(project)
 
 
@@ -115,7 +121,7 @@ def _is_value(value: object) -> bool:
 def _dataset(
     project: str,
     facets: Mapping[object, object],
-    facet: str,
+    facet: str | None,
     session: Session,
 ) -> Dataset:
     """Create a dataset with any value of the facet and of missing facets."""
@@ -132,7 +138,7 @@ def _dataset(
             "mip": "*",
             **selected,
             "project": project,
-            facet: "*",
+            **({} if facet is None else {facet: "*"}),
         },
     )
     dataset.session = session
@@ -171,6 +177,9 @@ def facet_values(
     session = _session(project)
     if session is None or not is_searchable(project, facet):
         return []
+    if facet in timerange.FACETS:
+        ranges = _time_ranges(_dataset(project, facets, None, session))
+        return timerange.suggestions(facet, ranges)
     dataset = _dataset(project, facets, facet, session)
     values = {
         str(found.facets[facet])
@@ -178,3 +187,14 @@ def facet_values(
         if is_name(str(found.facets.get(facet, "*")))
     }
     return sorted(values)
+
+
+def _time_ranges(dataset: Dataset) -> Iterator[tuple[str, str]]:
+    """Get the time ranges without missing years of each matching dataset."""
+    for found in dataset.from_files():
+        dates = [
+            str(file.facets["timerange"]).split("/")
+            for file in found.files
+            if "timerange" in file.facets
+        ]
+        yield from timerange.join((d[0], d[-1]) for d in dates)
