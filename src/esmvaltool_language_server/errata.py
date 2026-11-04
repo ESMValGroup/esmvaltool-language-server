@@ -13,7 +13,9 @@ identifiers of datasets on ESGF.
 from __future__ import annotations
 
 import dataclasses
+import functools
 import logging
+import re
 import threading
 import time
 from collections import Counter
@@ -49,6 +51,9 @@ _OPEN = frozenset({"new", "onhold"})
 
 # The prefix that ESMValCore adds to the version of a dataset on ESGF.
 _VERSION_PREFIX = "v"
+
+# A range of ensemble members or start dates in a facet value.
+_RANGE = re.compile(r"\((\d+):(\d+)\)")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -174,15 +179,30 @@ class ErrataService:
             return []
 
 
+@functools.lru_cache(maxsize=1024)
+def _expand_ranges(value: str) -> tuple[str, ...]:
+    """Expand ranges, for example ``r(1:2)i1p1f1``, like ESMValCore does."""
+    match = _RANGE.search(value)
+    if match is None:
+        return (value,)
+    start, end = int(match[1]), int(match[2])
+    return tuple(
+        name
+        for i in range(start, end + 1)
+        for name in _expand_ranges(
+            f"{value[: match.start()]}{i}{value[match.end() :]}",
+        )
+    )
+
+
 def _values(value: object) -> list[str] | None:
     """Get the names that a facet value selects, or None for any name."""
     values = value if isinstance(value, list) else [value]
     if not values or not all(cmor.is_name(v) for v in values):
         return None
-    # Ranges of ensemble members are not expanded.
-    if any("(" in str(v) for v in values):
-        return None
-    return [str(v).lower() for v in values]
+    return [
+        name.lower() for value in values for name in _expand_ranges(str(value))
+    ]
 
 
 def affects(
