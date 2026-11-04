@@ -289,7 +289,8 @@ class _Collection:
 
     url: str
     queryables: frozenset[str]
-    aggregations: frozenset[str]
+    aggregations: frozenset[str] | None
+    """The aggregations, None if the index cannot list them."""
 
 
 @functools.cache
@@ -306,15 +307,23 @@ def _stac_collection(url: str, project: str) -> _Collection | None:
     for collection in get(base)["collections"]:
         if collection["id"].lower() == project.lower():
             path = f"{base}/{collection['id']}"
+            # Some indices fail to list the aggregations that they do support.
             try:
-                aggregations = get(f"{path}/aggregations")["aggregations"]
+                aggregations = frozenset(
+                    a["name"]
+                    for a in get(f"{path}/aggregations")["aggregations"]
+                )
             except requests.HTTPError as exc:
-                logger.warning("Cannot count the values of facets: %s", exc)
-                aggregations = []
+                logger.warning(
+                    "Cannot count the values of facets for certain, "
+                    "trying anyway: %s",
+                    exc,
+                )
+                aggregations = None
             return _Collection(
                 url=path,
                 queryables=frozenset(get(f"{path}/queryables")["properties"]),
-                aggregations=frozenset(a["name"] for a in aggregations),
+                aggregations=aggregations,
             )
     return None
 
@@ -331,25 +340,62 @@ def _stac_name(collection: _Collection, project: str, field: str) -> str:
     return prefixed if prefixed in collection.queryables else field
 
 
+def _stac_selection(
+    collection: _Collection,
+    project: str,
+    query: Query,
+) -> tuple[list[tuple[str, list[str]]], list[tuple[str, bool]]]:
+    """Get the values of the properties that can be searched on an index."""
+    selection = [
+        (name, values)
+        for key, values in query.items()
+        if key != "project"
+        and (name := _stac_name(collection, project, key))
+        in collection.queryables
+    ]
+    flags = [
+        (name, value)
+        for name, value in (("latest", True), ("retracted", False))
+        if name in collection.queryables
+    ]
+    return selection, flags
+
+
 def _stac_filter(
     collection: _Collection,
     project: str,
     query: Query,
 ) -> dict[str, str]:
     """Get the parameters that select the latest datasets matching a query."""
-    conditions = [
-        _cql2_text(name, values)
-        for key, values in query.items()
-        if key != "project"
-        and (name := _stac_name(collection, project, key))
-        in collection.queryables
+    selection, flags = _stac_selection(collection, project, query)
+    conditions = [_cql2_text(name, values) for name, values in selection]
+    conditions.extend(f"{name}={str(value).lower()}" for name, value in flags)
+    return {"filter-lang": "cql2-text", "filter": " AND ".join(conditions)}
+
+
+def _stac_json_filter(
+    collection: _Collection,
+    project: str,
+    query: Query,
+) -> dict[str, Any]:
+    """Get the JSON version of the parameters of :func:`_stac_filter`."""
+    selection, flags = _stac_selection(collection, project, query)
+    conditions: list[dict[str, Any]] = [
+        {"op": "in", "args": [{"property": name}, values]}
+        for name, values in selection
     ]
     conditions.extend(
-        f"{key}={value}"
-        for key, value in (("latest", "true"), ("retracted", "false"))
-        if key in collection.queryables
+        {"op": "=", "args": [{"property": name}, value]}
+        for name, value in flags
     )
-    return {"filter-lang": "cql2-text", "filter": " AND ".join(conditions)}
+    if not conditions:
+        return {}
+    return {
+        "filter-lang": "cql2-json",
+        "filter": conditions[0]
+        if len(conditions) == 1
+        else {"op": "and", "args": conditions},
+    }
 
 
 def _stac_values(
@@ -363,13 +409,19 @@ def _stac_values(
         return {}
     name = _stac_name(collection, project, field)
     aggregation = name.replace(":", "_") + "_frequency"
-    if aggregation not in collection.aggregations:
+    if (
+        collection.aggregations is not None
+        and aggregation not in collection.aggregations
+    ):
         return {}
-    response = index.session.get(
+    # Some indices ignore the filter of this request if it is sent with GET.
+    response = index.session.post(
         f"{collection.url}/aggregate",
-        params={
-            "aggregations": aggregation,
-            **_stac_filter(collection, project, query),
+        json={
+            "aggregations": [aggregation],
+            # Some indices only return the 10 most common values by default.
+            "size": _MAX_VALUES,
+            **_stac_json_filter(collection, project, query),
         },
         timeout=TIMEOUT,
     )

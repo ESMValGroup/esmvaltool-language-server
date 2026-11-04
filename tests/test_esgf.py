@@ -40,6 +40,10 @@ class _Session:
         self.params.append(params)
         return self.responses[url]
 
+    def post(self, url: str, json: Any = None, **_: object) -> _Response:  # noqa: ANN401
+        self.params.append(json)
+        return self.responses[url]
+
 
 class _GlobusClient:
     def __init__(self, response: dict[str, Any]) -> None:
@@ -207,11 +211,18 @@ def test_stac_values(stac_session: _Session) -> None:
     }
     assert esgf._stac_values(index, query, "source_id") == {"A": 4}
     params = stac_session.params[-1]
-    assert params["aggregations"] == "cmip6_source_id_frequency"
+    assert params["aggregations"] == ["cmip6_source_id_frequency"]
     # Facets that cannot be searched for are left out.
-    assert params["filter"] == (
-        "\"cmip6:variable_id\" IN ('tas', 't''as') AND latest=true"
-    )
+    assert params["filter"] == {
+        "op": "and",
+        "args": [
+            {
+                "op": "in",
+                "args": [{"property": "cmip6:variable_id"}, ["tas", "t'as"]],
+            },
+            {"op": "=", "args": [{"property": "latest"}, True]},
+        ],
+    }
 
 
 def test_stac_values_without_aggregation(stac_session: _Session) -> None:
@@ -231,6 +242,39 @@ def test_stac_collection_without_aggregations(
     assert collection is not None
     assert not collection.aggregations
     assert "Cannot count the values of facets" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("queryables", "expected"),
+    [
+        (frozenset(), {}),
+        (
+            frozenset({"latest"}),
+            {
+                "filter-lang": "cql2-json",
+                "filter": {"op": "=", "args": [{"property": "latest"}, True]},
+            },
+        ),
+    ],
+)
+def test_stac_json_filter_with_few_conditions(
+    queryables: frozenset[str],
+    expected: dict[str, Any],
+) -> None:
+    collection = esgf._Collection("url", queryables, None)
+    assert esgf._stac_json_filter(collection, "CMIP6", {}) == expected
+
+
+def test_stac_values_without_list_of_aggregations(
+    stac_session: _Session,
+) -> None:
+    url = "https://stac/collections/CMIP6/aggregations"
+    stac_session.responses[url] = _Response("error", 500)
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    assert esgf._stac_values(index, {"project": ["CMIP6"]}, "source_id") == {
+        "A": 4,
+    }
+    assert stac_session.params[-1]["size"] == esgf._MAX_VALUES
 
 
 def test_index_values_error(caplog: pytest.LogCaptureFixture) -> None:
