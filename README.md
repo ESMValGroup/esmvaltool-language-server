@@ -22,7 +22,9 @@ authors and references it defines.
   keys that are defined more than once, and YAML syntax errors.
 - Completion of keys and values: preprocessor functions and their
   arguments, facets, projects, the MIP tables of the project, and the
-  branding suffixes of the variable; the preprocessors and tasks defined in the recipe; and, if
+  branding suffixes of the variable; the preprocessors and tasks defined in
+  the recipe, and the datasets of the variable group for
+  `reference_dataset` and `alternative_dataset`; and, if
   ESMValTool is installed, its diagnostic scripts, authors, and references.
   Keys are inserted with the arguments they require or their default value.
 - Completion of the facets of datasets, such as `dataset`, `exp`, `ensemble`,
@@ -75,7 +77,8 @@ authors and references it defines.
   **ESMValTool: Restart Language Server**; in Emacs, run
   `M-x eglot-reconnect`.
 - Go to the definition of a preprocessor, of a task listed in `ancestors`,
-  or of a diagnostic script.
+  of the dataset in `reference_dataset` or `alternative_dataset`, or of a
+  diagnostic script.
   If ESMValTool is installed, go to the definition of an author, project,
   theme, or realm in `config-references.yml`, or open the bibtex file of a
   reference.
