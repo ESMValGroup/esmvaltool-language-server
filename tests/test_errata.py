@@ -389,3 +389,37 @@ def test_erratum_of_aliased_datasets_is_shown_once(
     service = _service(monkeypatch, _Session([_issue()]))
     found = errata.errata_diagnostics(text, yaml.safe_load(text), service)
     assert [d.range.start.line for d in found] == [1]
+
+
+@pytest.mark.parametrize(
+    ("affected", "message"),
+    [
+        (("tas", "pr", "ta"), "Problem u1"),
+        (("tas", "pr"), "Problem u1 (affects tas, pr)"),
+    ],
+)
+def test_erratum_of_dataset_with_several_paths_is_merged(
+    monkeypatch: pytest.MonkeyPatch,
+    affected: tuple[str, ...],
+    message: str,
+) -> None:
+    text = (
+        "datasets: &datasets\n"
+        "  - {project: CMIP6, dataset: CESM2}\n"
+        "diagnostics:\n"
+        "  first:\n"
+        "    additional_datasets: *datasets\n"
+        "    variables:\n"
+        "      tas: {mip: Amon}\n"
+        "  second:\n"
+        "    additional_datasets: *datasets\n"
+        "    variables:\n"
+        "      pr: {mip: Amon}\n"
+        "      ta: {mip: Amon}\n"
+    )
+    issue = _issue(
+        datasets=tuple(CESM2.replace(".tas.", f".{v}.") for v in affected),
+    )
+    service = _service(monkeypatch, _Session([issue]))
+    found = errata.errata_diagnostics(text, yaml.safe_load(text), service)
+    assert [(d.range.start.line, d.message) for d in found] == [(1, message)]

@@ -16,6 +16,7 @@ import dataclasses
 import logging
 import threading
 import time
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, cast
 
@@ -24,7 +25,7 @@ import yaml
 from lsprotocol import types
 
 from esmvaltool_language_server import cmor, esgf
-from esmvaltool_language_server.schema import child
+from esmvaltool_language_server.schema import child, data_at
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
@@ -270,6 +271,9 @@ def find_errata(
 ) -> list[tuple[Path, Erratum, list[str] | None]]:
     """Find the errata of the datasets in a recipe.
 
+    Aliases and merge keys can make a dataset part of several paths. It is
+    reported once, for all of its variables.
+
     Parameters
     ----------
     recipe:
@@ -284,10 +288,16 @@ def find_errata(
         names of the variables it applies to, or None if it applies to all
         variables of the dataset.
     """
-    # The variables that each erratum applies to, and all variables.
-    applies: dict[tuple[Path, Erratum], list[str]] = {}
+    # The first path, the number of variables, and the variables that each
+    # erratum applies to, for each dataset.
+    paths: dict[int, Path] = {}
+    totals: Counter[int] = Counter()
+    applies: dict[tuple[int, Erratum], list[str]] = {}
     for path in _dataset_paths(recipe):
+        dataset = id(data_at(recipe, path))
+        paths.setdefault(dataset, path)
         all_variables = cmor.dataset_facets(path, recipe)
+        totals[dataset] += len(all_variables)
         for facets in all_variables:
             project, source = facets.get("project"), facets.get("dataset")
             if not (cmor.is_name(project) and cmor.is_name(source)):
@@ -298,15 +308,15 @@ def find_errata(
             }
             for erratum in service.errata(str(project), str(source)):
                 if _applies(erratum, facets, names):
-                    variables = applies.setdefault((path, erratum), [])
+                    variables = applies.setdefault((dataset, erratum), [])
                     variables.append(str(facets.get("short_name")))
-        totals = len(all_variables)
-        for (found_path, _), variables in applies.items():
-            if found_path == path and len(variables) == totals:
-                variables.clear()
     return [
-        (path, erratum, variables or None)
-        for (path, erratum), variables in applies.items()
+        (
+            paths[dataset],
+            erratum,
+            None if len(variables) == totals[dataset] else variables,
+        )
+        for (dataset, erratum), variables in applies.items()
     ]
 
 
@@ -358,24 +368,24 @@ def errata_diagnostics(
     except yaml.YAMLError:
         return []
     lines = text.splitlines()
-    # An alias or merge key can make a dataset part of several paths.
-    diagnostics: dict[tuple[int, int, str, str], types.Diagnostic] = {}
+    diagnostics = []
     for path, erratum, variables in find_errata(recipe, service):
         node = _node_at(root, path)
         line, column = node.start_mark.line, node.start_mark.column
-        message = _message(erratum, variables)
         end = len(lines[line].rstrip()) if line < len(lines) else column
-        diagnostics[(line, column, erratum.uid, message)] = types.Diagnostic(
-            range=types.Range(
-                start=types.Position(line=line, character=column),
-                end=types.Position(line=line, character=max(end, column)),
+        diagnostics.append(
+            types.Diagnostic(
+                range=types.Range(
+                    start=types.Position(line=line, character=column),
+                    end=types.Position(line=line, character=max(end, column)),
+                ),
+                message=_message(erratum, variables),
+                severity=types.DiagnosticSeverity.Warning
+                if erratum.status in _OPEN
+                else types.DiagnosticSeverity.Information,
+                code="erratum",
+                code_description=types.CodeDescription(href=erratum.url),
+                source=SOURCE,
             ),
-            message=message,
-            severity=types.DiagnosticSeverity.Warning
-            if erratum.status in _OPEN
-            else types.DiagnosticSeverity.Information,
-            code="erratum",
-            code_description=types.CodeDescription(href=erratum.url),
-            source=SOURCE,
         )
-    return list(diagnostics.values())
+    return diagnostics
