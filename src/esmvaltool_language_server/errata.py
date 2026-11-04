@@ -17,19 +17,22 @@ import functools
 import logging
 import re
 import sqlite3
+import threading
+import time
 from collections import Counter
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import requests
 import requests_cache
 import yaml
+from esmvalcore.preprocessor._derive import get_required
 from lsprotocol import types
 
 from esmvaltool_language_server import cmor, esgf
 from esmvaltool_language_server.schema import child, data_at
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Callable, Iterable, Iterator, Mapping
     from pathlib import Path as FilePath
 
     from esmvaltool_language_server.context import Path
@@ -48,6 +51,9 @@ TIMEOUT = 10
 CACHE = "esmvaltool-language-server/errata"
 MAX_AGE = 24 * 60 * 60
 
+# Do not ask the service again for this many seconds if it cannot be reached.
+RETRY_AFTER = 60
+
 # The names of the source of a dataset in the projects of the errata service.
 _SOURCE_FACETS = ("source_id", "source")
 
@@ -64,6 +70,14 @@ _VERSION_PREFIX = "v"
 
 # A range of ensemble members or start dates in a facet value.
 _RANGE = re.compile(r"\((\d+):(\d+)\)")
+
+
+class _UnavailableError(requests.RequestException):
+    """The errata service cannot be reached."""
+
+
+# What can go wrong when asking the service for an answer.
+_FAILURES = (requests.RequestException, LookupError, ValueError, sqlite3.Error)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -103,6 +117,13 @@ class ErrataService:
     ) -> None:
         self.cache = cache
         self.max_age = max_age
+        self.failed = False
+        """Whether asking the service failed, set until it is reset."""
+        self._retry_at = 0.0
+        # Reading the answers from disk takes too long to do for every check
+        # of a recipe, so also remember them in memory.
+        self._lock = threading.Lock()
+        self._cache: dict[tuple[str, ...], tuple[float, object]] = {}
 
     @functools.cached_property
     def session(self) -> requests.Session:
@@ -122,39 +143,91 @@ class ErrataService:
             return requests.Session()
         return session
 
+    def _cached[T](self, key: tuple[str, ...], get: Callable[[], T]) -> T:
+        """Get a value from the cache, or get it and remember it."""
+        now = time.monotonic()
+        with self._lock:
+            found = self._cache.get(key)
+        if found is not None and now - found[0] < self.max_age:
+            return cast("T", found[1])
+        value = get()
+        with self._lock:
+            self._cache[key] = (now, value)
+        return value
+
     def _get(self, path: str, **params: str) -> dict[str, Any]:
-        response = self.session.get(
-            f"{URL}{path}",
-            params=params,
-            timeout=TIMEOUT,
-        )
+        if time.monotonic() < self._retry_at:
+            self.failed = True
+            msg = "The errata service cannot be reached"
+            raise _UnavailableError(msg)
+        try:
+            response = self.session.get(
+                f"{URL}{path}",
+                params=params,
+                timeout=TIMEOUT,
+            )
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            self.failed = True
+            self._retry_at = time.monotonic() + RETRY_AFTER
+            logger.warning(
+                "Not asking the errata service for %s seconds: %s",
+                RETRY_AFTER,
+                exc,
+            )
+            raise _UnavailableError(str(exc)) from exc
         response.raise_for_status()
         return response.json()
 
     def _project_facets(self) -> dict[str, set[str]]:
         """Get the facets that can be searched for in each project."""
-        facets: dict[str, set[str]] = {}
-        for vocab in self._get("/2/search/errata/setup")["vocabs"]:
-            if vocab.get("project"):
-                facets.setdefault(vocab["project"], set()).add(vocab["key"])
-        return facets
+
+        def get() -> dict[str, set[str]]:
+            facets: dict[str, set[str]] = {}
+            for vocab in self._get("/2/search/errata/setup")["vocabs"]:
+                if vocab.get("project"):
+                    facets.setdefault(vocab["project"], set()).add(
+                        vocab["key"],
+                    )
+            return facets
+
+        return self._cached(("setup",), get)
 
     def _search(
         self,
         project: str,
         params: dict[str, str],
     ) -> list[dict[str, Any]]:
-        search = self._get("/2/search/errata", project=project, **params)
-        return search["results"]
+        def get() -> list[dict[str, Any]]:
+            search = self._get("/2/search/errata", project=project, **params)
+            return search["results"]
+
+        key = ("search", project, *sorted(params.values()))
+        return self._cached(key, get)
 
     def _erratum(self, uid: str) -> Erratum:
-        issue = self._get("/2/publication/retrieve", uid=uid)["issue"]
-        return Erratum(
-            uid=uid,
-            title=issue["title"],
-            status=issue["status"],
-            datasets=tuple(issue["datasets"]),
-        )
+        def get() -> Erratum:
+            issue = self._get("/2/publication/retrieve", uid=uid)["issue"]
+            return Erratum(
+                uid=uid,
+                title=issue["title"],
+                status=issue["status"],
+                datasets=tuple(issue["datasets"]),
+            )
+
+        return self._cached(("erratum", uid), get)
+
+    def _errata(self, uids: Iterable[str]) -> list[Erratum]:
+        """Get the errata that can be found, if not all of them can."""
+        found = []
+        for uid in uids:
+            try:
+                found.append(self._erratum(uid))
+            except _UnavailableError:
+                break
+            except _FAILURES as exc:
+                self.failed = True
+                logger.warning("Failed to get erratum %s: %s", uid, exc)
+        return found
 
     def errata(
         self,
@@ -182,8 +255,8 @@ class ErrataService:
         Returns
         -------
         :
-            The errata. Empty if the service does not know the project or
-            cannot be reached.
+            The errata that could be found. Empty if the service does not know
+            the project or cannot be reached.
         """
         project = project.lower()
         try:
@@ -206,13 +279,11 @@ class ErrataService:
                 for result in self._search(project, {facet: source, **search})
                 if resolved or result["status"] != "resolved"
             }
-            return [self._erratum(uid) for uid in uids]
-        except (
-            requests.RequestException,
-            LookupError,
-            ValueError,
-            sqlite3.Error,
-        ) as exc:
+            return self._errata(uids)
+        except _UnavailableError:
+            return []
+        except _FAILURES as exc:
+            self.failed = True
             logger.warning("Failed to find the errata of %s: %s", source, exc)
             return []
 
@@ -278,6 +349,26 @@ def affects(
     return versions is None or version.lower().removeprefix(
         _VERSION_PREFIX,
     ) in {v.removeprefix(_VERSION_PREFIX) for v in versions}
+
+
+def _input_facets(
+    facets: dict[object, object],
+) -> list[Mapping[object, object]]:
+    """Get the facets of the datasets on ESGF that a variable is made from.
+
+    A derived variable is computed from other variables, or read from the
+    variable itself if it is available.
+    """
+    if not facets.get("derive"):
+        return [facets]
+    try:
+        required = get_required(
+            str(facets.get("short_name")),
+            str(facets.get("project")),
+        )
+    except NotImplementedError:
+        return [{k: v for k, v in facets.items() if k != "short_name"}]
+    return [facets, *({**facets, **facet} for facet in required)]
 
 
 def _dataset_paths(recipe: object) -> Iterator[Path]:
@@ -367,7 +458,11 @@ def find_errata(
                 experiments=tuple(experiments) if experiments else None,
                 resolved=pinned,
             ):
-                if any(affects(i, facets, names) for i in erratum.datasets):
+                if any(
+                    affects(identifier, inputs, names)
+                    for inputs in _input_facets(facets)
+                    for identifier in erratum.datasets
+                ):
                     affected = applies.setdefault((dataset, erratum), [])
                     affected.append(str(facets.get("short_name")))
         yield [

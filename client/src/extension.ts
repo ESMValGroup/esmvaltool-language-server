@@ -29,6 +29,8 @@ function enqueue(operation: () => Promise<void>): Promise<void> {
 /** The API of this extension, used by its tests. */
 export interface Api {
   readonly mode: Mode;
+  /** The errata option that was sent to the running language server. */
+  readonly errataOption: boolean | undefined;
   /** Check if a file is a recipe, for the schema. */
   isRecipe(resource: string): boolean;
 }
@@ -56,6 +58,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
   }
   await enqueue(start);
   return {
+    get errataOption() {
+      const options = client?.clientOptions.initializationOptions as
+        { errata?: boolean } | undefined;
+      return options?.errata;
+    },
     get mode() {
       return schemaFallback.mode;
     },

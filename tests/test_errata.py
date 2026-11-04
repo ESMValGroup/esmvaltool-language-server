@@ -258,7 +258,7 @@ def test_service_ignores_failure(
     session.fail = True
     service = _service(monkeypatch, session)
     assert service.errata("CMIP6", "CESM2") == []
-    assert "Failed to find the errata" in caplog.text
+    assert "Not asking the errata service" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -652,3 +652,106 @@ def test_variables_of_a_dataset_search_once(
     service = _service(monkeypatch, session)
     _diagnostics(text, yaml.safe_load(text), service)
     assert len(_searches(session)) == 1
+
+
+def test_erratum_that_cannot_be_fetched_keeps_the_others(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _Session([_issue("first"), _issue("bad"), _issue("last")])
+    del session.issues["bad"]["title"]
+    service = _service(monkeypatch, session)
+    found = service.errata("CMIP6", "CESM2")
+    assert [e.uid for e in found] == ["first", "last"]
+    assert service.failed
+
+
+def test_service_is_not_asked_again_if_it_cannot_be_reached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _Session([_issue()])
+    session.fail = True
+    service = _service(monkeypatch, session)
+    assert service.errata("CMIP6", "CESM2") == []
+    assert service.errata("CMIP6", "MIROC6") == []
+    assert len(session.requests) == 1
+    assert service.failed
+
+
+def test_service_is_asked_again_after_some_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(errata, "RETRY_AFTER", 0)
+    session = _Session([_issue()])
+    session.fail = True
+    service = _service(monkeypatch, session)
+    assert service.errata("CMIP6", "CESM2") == []
+    session.fail = False
+    assert [e.uid for e in service.errata("CMIP6", "CESM2")] == ["u1"]
+
+
+def test_service_keeps_errata_found_before_it_became_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _Session([_issue("first"), _issue("last")])
+    get = session.get
+
+    def fail_on_last(
+        url: str,
+        params: dict[str, str],
+        **_: object,
+    ) -> _Response:
+        session.fail = params.get("uid") == "last"
+        return get(url, params)
+
+    monkeypatch.setattr(session, "get", fail_on_last)
+    service = _service(monkeypatch, session)
+    assert [e.uid for e in service.errata("CMIP6", "CESM2")] == ["first"]
+
+
+def test_service_remembers_results_in_memory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _Session([_issue()])
+    service = _service(monkeypatch, session)
+    service.errata("CMIP6", "CESM2")
+    count = len(session.requests)
+    service.errata("CMIP6", "CESM2")
+    assert len(session.requests) == count
+
+
+@pytest.mark.parametrize(
+    ("variable", "affected", "message"),
+    [
+        pytest.param("rtnt", "rlut", "Problem u1", id="input of derived"),
+        pytest.param("rtnt", "rtnt", "Problem u1", id="derived on ESGF"),
+        pytest.param("rtnt", "tos", None, id="unrelated variable"),
+        pytest.param("unknown", "tos", "Problem u1", id="cannot be derived"),
+    ],
+)
+def test_errata_of_derived_variables(
+    monkeypatch: pytest.MonkeyPatch,
+    variable: str,
+    affected: str,
+    message: str | None,
+) -> None:
+    text = (
+        "datasets:\n"
+        "  - {project: CMIP6, dataset: CESM2}\n"
+        "diagnostics:\n"
+        "  diag:\n"
+        "    variables:\n"
+        f"      {variable}: {{mip: Amon, derive: true}}\n"
+    )
+    issue = _issue(datasets=(CESM2.replace(".tas.", f".{affected}."),))
+    service = _service(monkeypatch, _Session([issue]))
+    found = _diagnostics(text, yaml.safe_load(text), service)
+    assert [d.message for d in found] == ([message] if message else [])
+
+
+def test_variable_that_is_not_derived_needs_its_own_erratum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text, recipe = _recipe("project: CMIP6, dataset: CESM2")
+    issue = _issue(datasets=(CESM2.replace(".tas.", ".rlut."),))
+    service = _service(monkeypatch, _Session([issue]))
+    assert _diagnostics(text, recipe, service) == []

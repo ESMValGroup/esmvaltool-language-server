@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from lsprotocol import types
@@ -56,6 +57,15 @@ class RecipeLanguageServer(LanguageServer):
         # Looking up errata sends the datasets in recipes to the ESGF errata
         # service, so the user can turn it off.
         self.errata_enabled = True
+        # Looking up errata waits for the service, so it does not use the
+        # threads that check recipes.
+        self.errata_executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="errata",
+        )
+        # The errata on the screen for each recipe.
+        self.errata_shown: dict[str, list[types.Diagnostic]] = {}
+        self.errata_warned = False
 
     def schedule_check(self, uri: str, delay: float = 0.0) -> None:
         """Check a recipe after a delay, replacing an earlier check."""
@@ -81,8 +91,16 @@ class RecipeLanguageServer(LanguageServer):
             return
         if recipe is not MISSING:
             self.recipes[uri] = recipe
+        elif not diagnostics:
+            # This is not a recipe (anymore).
+            self.errata_shown.pop(uri, None)
         lines = document.lines
-        self._publish(document, lines, version, diagnostics)
+        self._publish(
+            document,
+            lines,
+            version,
+            [*diagnostics, *self.errata_shown.get(uri, [])],
+        )
         if recipe is not MISSING and self.errata_enabled:
             await self._publish_errata(document, lines, recipe, diagnostics)
         if self.pending.get(uri) is asyncio.current_task():
@@ -121,11 +139,27 @@ class RecipeLanguageServer(LanguageServer):
 
         The errata are looked up after the diagnostics have been published,
         because the service may be slow, and published as they are found.
+        If there are errata on the screen, those are kept until all errata
+        have been found, or if the service fails, so they do not disappear
+        while editing a recipe.
         This stops if the recipe has changed or was closed in the meantime.
         """
         uri, version = document.uri, document.version
         loop = asyncio.get_running_loop()
-        shown: list[types.Diagnostic] = []
+        previous = self.errata_shown.get(uri)
+        found: list[types.Diagnostic] = []
+        self.errata.failed = False
+
+        def show() -> None:
+            if found != self.errata_shown.get(uri, []):
+                self.errata_shown[uri] = found
+                self._publish(
+                    document,
+                    lines,
+                    version,
+                    [*diagnostics, *found],
+                )
+
         try:
             updates = errata_diagnostics(
                 document.source,
@@ -133,23 +167,43 @@ class RecipeLanguageServer(LanguageServer):
                 self.errata,
             )
             while True:
-                errata = await loop.run_in_executor(None, next, updates, None)
+                update = await loop.run_in_executor(
+                    self.errata_executor,
+                    next,
+                    updates,
+                    None,
+                )
                 if (
-                    errata is None
-                    or uri not in self.workspace.text_documents
+                    uri not in self.workspace.text_documents
                     or self.workspace.get_text_document(uri).version != version
                 ):
                     return
-                if errata != shown:
-                    shown = errata
-                    self._publish(
-                        document,
-                        lines,
-                        version,
-                        [*diagnostics, *errata],
-                    )
+                if update is None:
+                    break
+                found = update
+                if not previous:
+                    show()
         except Exception:
             logger.exception("Failed to find errata for %s", uri)
+            self.errata.failed = True
+        if self.errata.failed:
+            self._warn_about_errata()
+        else:
+            show()
+
+    def _warn_about_errata(self) -> None:
+        """Tell the user once that errata may be missing."""
+        if not self.errata_warned:
+            self.errata_warned = True
+            self.window_show_message(
+                types.ShowMessageParams(
+                    type=types.MessageType.Warning,
+                    message=(
+                        "Not all errata of the datasets in the recipe could "
+                        "be found on the ESGF errata service."
+                    ),
+                ),
+            )
 
 
 def _check_document(text: str) -> tuple[object, list[types.Diagnostic]]:
@@ -242,6 +296,7 @@ def did_close(
     if task := ls.pending.pop(uri, None):
         task.cancel()
     ls.recipes.pop(uri, None)
+    ls.errata_shown.pop(uri, None)
     ls.text_document_publish_diagnostics(
         types.PublishDiagnosticsParams(uri=uri, diagnostics=[]),
     )

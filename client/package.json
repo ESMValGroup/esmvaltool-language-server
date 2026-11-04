@@ -48,7 +48,7 @@
         "esmvaltool.languageServer.errata": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Show [errata](https://errata.esgf.io) of the datasets in a recipe. To find them, the project and name of the datasets are sent to the ESGF errata service."
+          "markdownDescription": "Show [errata](https://errata.esgf.io) of the datasets in a recipe. To find them, the project, name, and experiment of the datasets are sent to the ESGF errata service."
         }
       }
     }
