@@ -19,7 +19,6 @@ import re
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any, cast
 
 import requests
@@ -45,6 +44,11 @@ TIMEOUT = 10
 
 # The names of the source of a dataset in the projects of the errata service.
 _SOURCE_FACETS = ("source_id", "source")
+
+# The names of the experiment of a dataset in the projects of the errata
+# service. The service finds no errata if it does not know a facet, so only
+# facets that it lists for a project are used.
+_EXPERIMENT_FACETS = ("experiment_id", "experiment")
 
 # Errata of datasets that may still be affected.
 _OPEN = frozenset({"new", "onhold"})
@@ -117,18 +121,32 @@ class ErrataService:
         response.raise_for_status()
         return response.json()
 
-    def _source_facets(self) -> dict[str, str]:
-        """Get the name of the source of datasets in each project."""
+    def _project_facets(self) -> dict[str, set[str]]:
+        """Get the facets that can be searched for in each project."""
 
-        def get() -> dict[str, str]:
+        def get() -> dict[str, set[str]]:
             setup = self._get("/2/search/errata/setup")
-            return {
-                vocab["project"]: vocab["key"]
-                for vocab in setup["vocabs"]
-                if vocab.get("project") and vocab["key"] in _SOURCE_FACETS
-            }
+            facets: dict[str, set[str]] = {}
+            for vocab in setup["vocabs"]:
+                if vocab.get("project"):
+                    facets.setdefault(vocab["project"], set()).add(
+                        vocab["key"]
+                    )
+            return facets
 
         return self._cached(("setup",), get)
+
+    def _search(
+        self,
+        project: str,
+        params: dict[str, str],
+    ) -> list[dict[str, Any]]:
+        def get() -> list[dict[str, Any]]:
+            search = self._get("/2/search/errata", project=project, **params)
+            return search["results"]
+
+        key = ("search", project, *sorted(params.values()))
+        return self._cached(tuple(v.lower() for v in key), get)
 
     def _erratum(self, uid: str) -> Erratum:
         def get() -> Erratum:
@@ -147,6 +165,7 @@ class ErrataService:
         project: str,
         source: str,
         *,
+        experiments: list[str] | None = None,
         resolved: bool = True,
     ) -> list[Erratum]:
         """Find the errata of the datasets of a source in a project.
@@ -157,6 +176,9 @@ class ErrataService:
             The project, for example CMIP6.
         source:
             The source of the datasets, for example CESM2.
+        experiments:
+            Only find errata of these experiments, if the service can search
+            for experiments in the project. None for all experiments.
         resolved:
             Whether to include resolved errata. Getting an erratum takes a
             request, and the search already tells which ones are resolved.
@@ -169,24 +191,26 @@ class ErrataService:
         """
         project = project.lower()
         try:
-            facet = self._source_facets().get(project)
+            facets = self._project_facets().get(project, set())
+            facet = next((f for f in _SOURCE_FACETS if f in facets), None)
             if facet is None:
                 return []
-            search = self._cached(
-                ("search", project, source.lower()),
-                lambda: self._get(
-                    "/2/search/errata",
-                    project=project,
-                    **{facet: source},
-                ),
+            experiment = next(
+                (f for f in _EXPERIMENT_FACETS if f in facets),
+                None,
             )
-            uids = [
-                result["uid"]
-                for result in search["results"]
+            searches = (
+                [{experiment: name} for name in experiments]
+                if experiment and experiments
+                else [{}]
+            )
+            uids = {
+                result["uid"]: None
+                for search in searches
+                for result in self._search(project, {facet: source, **search})
                 if resolved or result["status"] != "resolved"
-            ]
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                return list(pool.map(self._erratum, uids))
+            }
+            return [self._erratum(uid) for uid in uids]
         except (requests.RequestException, LookupError, ValueError) as exc:
             logger.warning("Failed to find the errata of %s: %s", source, exc)
             return []
@@ -333,7 +357,12 @@ def find_errata(
         names = esgf.intake_esgf_facets(project) - {"project", "version"}
         for dataset, facets in variables:
             pinned = _values(facets.get("version")) is not None
-            for erratum in service.errata(project, source, resolved=pinned):
+            for erratum in service.errata(
+                project,
+                source,
+                experiments=_values(facets.get("exp")),
+                resolved=pinned,
+            ):
                 if any(affects(i, facets, names) for i in erratum.datasets):
                     affected = applies.setdefault((dataset, erratum), [])
                     affected.append(str(facets.get("short_name")))

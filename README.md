@@ -84,9 +84,9 @@ authors and references it defines.
   message names them.
   A resolved erratum is only shown for a dataset with a `version` that is
   affected, because the latest version is usually no longer affected.
-  To find them, the project and name of each dataset in the recipe are sent to
-  the service; other facets, such as the version, are compared locally with
-  the affected datasets.
+  To find them, the project, name, and experiment of each dataset in the recipe
+  are sent to the service; other facets, such as the version, are compared
+  locally with the affected datasets.
   The errata are shown after the other problems, as they are found, which can
   take up to a minute for a recipe with many models.
   They are remembered for an hour and left out if the service cannot be

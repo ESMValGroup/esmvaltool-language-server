@@ -14,6 +14,7 @@ SETUP = {
     "vocabs": [
         {"key": "status", "project": None},
         {"key": "source_id", "project": "cmip6"},
+        {"key": "experiment_id", "project": "cmip6"},
         {"key": "variable_id", "project": "cmip6"},
         {"key": "source", "project": "cmip7"},
     ],
@@ -496,3 +497,49 @@ def test_diagnostics_are_yielded_for_each_source(
         [1, 3],
         [1, 3, 2],
     ]
+
+
+def _searches(session: _Session) -> list[dict[str, str]]:
+    return [
+        params
+        for path, params in session.requests
+        if path == "/2/search/errata"
+    ]
+
+
+@pytest.mark.parametrize(
+    ("facets", "experiments"),
+    [
+        ("project: CMIP6, dataset: CESM2", [None]),
+        ("project: CMIP6, dataset: CESM2, exp: '*'", [None]),
+        ("project: CMIP6, dataset: CESM2, exp: historical", ["historical"]),
+        (
+            "project: CMIP6, dataset: CESM2, exp: [historical, ssp585]",
+            ["historical", "ssp585"],
+        ),
+        ("project: CMIP7, dataset: CESM2, exp: historical", [None]),
+    ],
+)
+def test_search_for_experiments(
+    monkeypatch: pytest.MonkeyPatch,
+    facets: str,
+    experiments: list[str | None],
+) -> None:
+    text, recipe = _recipe(facets)
+    session = _Session([_issue()])
+    _diagnostics(text, recipe, _service(monkeypatch, session))
+    assert [
+        search.get("experiment_id") for search in _searches(session)
+    ] == experiments
+
+
+def test_erratum_of_several_experiments_is_found_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text, recipe = _recipe(
+        "project: CMIP6, dataset: CESM2, exp: [historical, ssp585]",
+    )
+    session = _Session([_issue()])
+    found = _diagnostics(text, recipe, _service(monkeypatch, session))
+    assert len(found) == 1
+    assert len(_fetched(session)) == 1
