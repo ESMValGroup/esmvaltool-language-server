@@ -96,7 +96,7 @@ class FacetSearch:
         Search again after this many seconds.
     """
 
-    def __init__(self, max_age: float = 600) -> None:
+    def __init__(self, max_age: float = 2 * 60 * 60) -> None:
         self.max_age = max_age
         self._executor = ThreadPoolExecutor(max_workers=4)
         self._searches: dict[Hashable, tuple[float, Future[list[str]]]] = {}

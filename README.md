@@ -52,7 +52,7 @@ authors and references it defines.
   or months, and with the day otherwise.
   Finding the values usually takes less than a second; until then, the values
   that the recipe schema allows are suggested.
-  The values are remembered for 10 minutes.
+  The values are remembered for 2 hours.
 - Documentation of preprocessor functions and other keys, their values, and
   preprocessors, with default values, when you hover over them.
   Hovering over the value of a facet, such as `dataset`, `exp`,
