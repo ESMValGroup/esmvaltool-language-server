@@ -27,18 +27,30 @@ authors and references it defines.
   `reference_dataset` and `alternative_dataset`; and, if
   ESMValTool is installed, its diagnostic scripts, authors, and references.
   Keys are inserted with the arguments they require or their default value.
-- Completion of the facets of datasets, such as `dataset`, `exp`, and
-  `ensemble`, with the values of the available datasets that match the other
-  facets of the variable and dataset, including its supplementary variables.
+- Completion of the facets of datasets, such as `dataset`, `exp`, `ensemble`,
+  `timerange`, `start_year`, and `end_year`, with the values of the available
+  datasets that match the other facets of the variable and dataset, including
+  its supplementary variables.
   The values are found on the ESGF indices that are enabled in the
   [intake-esgf configuration](https://intake-esgf.readthedocs.io/en/latest/configure.html),
   so the facets in the recipe are sent to these indices, and in the other
   data sources that are configured in ESMValCore, such as local directories.
   The facets of the other data sources that can be completed are those in
   the templates of their paths.
+  `timerange`, `start_year`, and `end_year` are only completed from ESGF once
+  `exp` is given.
+  The accuracy of the values depends on the metadata provided by ESGF.
   Finding the values usually takes less than a second; until then, the values
   that the recipe schema allows are suggested.
-  The values are remembered for 10 minutes.
+  The values are remembered for 2 hours, or for 10 minutes if an index or
+  other data source could not be searched.
+  To get fresh suggestions, for example for local files that you just added
+  or after changing the indices in the intake-esgf configuration, restart the
+  language server: in Visual Studio Code, press
+  <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>
+  (<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> on macOS) and run
+  **ESMValTool: Restart Language Server**; in Emacs, run
+  `M-x eglot-reconnect`.
 - Documentation of preprocessor functions and other keys, their values, and
   preprocessors, with default values, when you hover over them.
   Hovering over the value of a facet, such as `dataset`, `exp`,
