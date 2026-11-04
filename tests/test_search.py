@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from esmvaltool_language_server import search
+from esmvaltool_language_server import esgf, search
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -126,3 +126,45 @@ def test_unused_facets(monkeypatch: pytest.MonkeyPatch) -> None:
     assert search.unused_facets("CMIP6") == {"tier"}
     assert search.unused_facets("unknown") == set()
     search._all_facets.cache_clear()
+
+
+def test_facet_search_retries_after_error(source: _Source) -> None:
+    source.values = []
+    facet_search = search.FacetSearch(retry_age=0)
+    first = facet_search.submit("CMIP6", {}, "dataset")
+    assert first is not None
+    assert first.result() == []
+    source.values = ["A"]
+    second = facet_search.submit("CMIP6", {}, "dataset")
+    assert second is not None
+    assert second is not first
+    assert second.result() == ["A"]
+    # The second search found all values, so it is remembered.
+    assert facet_search.submit("CMIP6", {}, "dataset") is second
+    assert len(source.searches) == 2
+
+
+def test_facet_search_retries_after_failure_of_index(
+    monkeypatch: pytest.MonkeyPatch,
+    source: _Source,
+) -> None:
+    def facet_values(*_: object) -> list[str]:
+        # An index failed, but the others found values.
+        esgf.record_failure("index")
+        return ["A"]
+
+    monkeypatch.setattr(source, "facet_values", facet_values)
+    facet_search = search.FacetSearch(retry_age=0)
+    first = facet_search.submit("CMIP6", {}, "dataset")
+    assert first is not None
+    assert first.result() == ["A"]
+    assert facet_search.submit("CMIP6", {}, "dataset") is not first
+
+
+def test_facet_search_remembers_failure_until_retry(source: _Source) -> None:
+    source.values = []
+    facet_search = search.FacetSearch()
+    first = facet_search.submit("CMIP6", {}, "dataset")
+    assert first is not None
+    first.result()
+    assert facet_search.submit("CMIP6", {}, "dataset") is first
