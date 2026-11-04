@@ -286,6 +286,23 @@ def test_affects(facets: dict[str, object], *, expected: bool) -> None:
     assert errata.affects(f"{CESM2}#20190308", facets, names) is expected
 
 
+@pytest.mark.network
+def test_errata_online(tmp_path: Path) -> None:
+    # Notice when the API of the errata service changes.
+    service = errata.ErrataService(cache=tmp_path / "errata")
+    found = service.errata("CMIP6", "CESM2", experiments=("historical",))
+    assert not service.failed
+    assert found
+    assert "resolved" in {erratum.status for erratum in found}
+    for erratum in found:
+        assert erratum.title
+        # An erratum can also list the datasets of other sources.
+        assert any(
+            errata.affects(dataset, {"dataset": "CESM2"}, {"dataset"})
+            for dataset in erratum.datasets
+        )
+
+
 def test_affects_without_version() -> None:
     assert errata.affects(CESM2, {"version": "v1"}, set()) is False
     assert errata.affects(CESM2, {"dataset": "CESM2"}, {"dataset"})

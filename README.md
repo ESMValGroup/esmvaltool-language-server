@@ -211,9 +211,9 @@ npm run package                    # build a package that can be installed
 ```
 
 The tests marked `network` need internet access.
-They check the Essential Model Documentation of CMIP7 models and the links in
-the recipe schema and in the documentation shown when hovering over tags,
-references, and facets.
+They check the Essential Model Documentation of CMIP7 models, the API of the
+ESGF errata service, and the links in the recipe schema and in the documentation
+shown when hovering over tags, references, and facets.
 Links to the latest documentation of ESMValCore and ESMValTool are checked
 against the documentation of the development versions that the server is
 developed with; to use other documentation, set `ESMVALCORE_DOCS` or
