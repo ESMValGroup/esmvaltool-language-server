@@ -92,6 +92,20 @@ def test_formatting_edits(text: str, expected: str) -> None:
     assert _apply(text, formatting_edits(text)) == expected
 
 
+def test_formatting_edits_folded_description() -> None:
+    text = (
+        "# recipe.yml\n---\ndocumentation:\n  description: >\n"
+        "    First paragraph.\n\n    Second paragraph.\n\n"
+        "    - item one\n    - item two\n"
+    )
+    assert not has_comments(text)
+    assert _apply(text, formatting_edits(text)) == (
+        "# recipe.yml\n---\ndocumentation:\n  description: |-\n"
+        "    First paragraph.\n\n    Second paragraph.\n\n"
+        "    - item one\n    - item two\n"
+    )
+
+
 def test_formatting_edits_only_changed_lines() -> None:
     text = FORMATTED.replace(
         "dataset: CESM2, project: CMIP6", "project: CMIP6, dataset: CESM2"

@@ -162,11 +162,12 @@ requests-cache = "*"
 esmvaltool-language-server = { path = ".", editable = true }
 
 # Use the development version of ESMValCore, because no release has the
-# recipe checks yet.
-# TODO: use the main branch once ESMValCore#3261 has been merged and a
-# released version of ESMValCore once v2.16 is available.
+# recipe checks yet. The format-recipe branch builds on the recipe-json-schema
+# branch of ESMValCore#3261 and adds esmvalcore.recipe.format_recipe.
+# TODO: use the main branch once these have been merged and a released version
+# of ESMValCore once v2.16 is available.
 [tool.pixi.feature.esmvalcore-dev.pypi-dependencies]
-esmvalcore = { git = "https://github.com/ESMValGroup/ESMValCore.git", branch = "recipe-json-schema" }
+esmvalcore = { git = "https://github.com/ESMValGroup/ESMValCore.git", branch = "format-recipe" }
 # Replace the line above with the following to use a local ESMValCore
 # repository instead.
 # esmvalcore = { path = "../esmvalcore", editable = true }

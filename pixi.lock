@@ -384,7 +384,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.2-pyh5ded981_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=recipe-json-schema#ebb0ff79fb66810737311478ad2ac98cc4ca6be8
+      - pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=format-recipe#13fdce63e069229c225366fc1ff7ade905203c9a
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiohappyeyeballs-2.7.1-pyhd8ed1ab_0.conda
@@ -732,7 +732,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
-      - pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=recipe-json-schema#ebb0ff79fb66810737311478ad2ac98cc4ca6be8
+      - pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=format-recipe#13fdce63e069229c225366fc1ff7ade905203c9a
   py312:
     channels:
     - url: https://conda.anaconda.org/conda-forge/
@@ -1108,7 +1108,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/zict-3.0.0-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/zipp-4.1.2-pyh5ded981_0.conda
       - pypi: ./
-      - pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=recipe-json-schema#ebb0ff79fb66810737311478ad2ac98cc4ca6be8
+      - pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=format-recipe#13fdce63e069229c225366fc1ff7ade905203c9a
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/noarch/_python_abi3_support-1.0-hd8ed1ab_3.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/aiohappyeyeballs-2.7.1-pyhd8ed1ab_0.conda
@@ -1458,7 +1458,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zlib-ng-2.3.3-h31dac16_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/zstd-1.5.7-hf451053_7.conda
       - pypi: ./
-      - pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=recipe-json-schema#ebb0ff79fb66810737311478ad2ac98cc4ca6be8
+      - pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=format-recipe#13fdce63e069229c225366fc1ff7ade905203c9a
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_openmp_mutex-4.5-20_gnu.conda
   build_number: 20
@@ -5809,7 +5809,7 @@ packages:
   license: MIT
   license_family: MIT
   purls:
-  - pkg:pypi/ukkonen?source=compressed-mapping
+  - pkg:pypi/ukkonen?source=hash-mapping
   run_exports: {}
   size: 17718
   timestamp: 1793037115940
@@ -7271,7 +7271,7 @@ packages:
   - python
   license: MIT
   purls:
-  - pkg:pypi/platformdirs?source=compressed-mapping
+  - pkg:pypi/platformdirs?source=hash-mapping
   run_exports: {}
   size: 34235
   timestamp: 1793188966477
@@ -7923,7 +7923,7 @@ packages:
   - pytest-faulthandler >=2
   license: MIT
   purls:
-  - pkg:pypi/pytest?source=compressed-mapping
+  - pkg:pypi/pytest?source=hash-mapping
   run_exports: {}
   size: 326611
   timestamp: 1793185375808
@@ -7960,7 +7960,7 @@ packages:
   license: Apache-2.0
   license_family: APACHE
   purls:
-  - pkg:pypi/pytest-asyncio?source=compressed-mapping
+  - pkg:pypi/pytest-asyncio?source=hash-mapping
   run_exports: {}
   size: 43539
   timestamp: 1793019249440
@@ -8017,7 +8017,7 @@ packages:
   - python
   license: MIT
   purls:
-  - pkg:pypi/python-discovery?source=compressed-mapping
+  - pkg:pypi/python-discovery?source=hash-mapping
   run_exports: {}
   size: 39964
   timestamp: 1793179898331
@@ -12483,7 +12483,7 @@ packages:
   license: MIT
   license_family: MIT
   purls:
-  - pkg:pypi/ukkonen?source=compressed-mapping
+  - pkg:pypi/ukkonen?source=hash-mapping
   run_exports: {}
   size: 21143
   timestamp: 1793037266203
@@ -12670,9 +12670,9 @@ packages:
   - requests
   - requests-cache
   requires_python: '>=3.12'
-- pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=recipe-json-schema#ebb0ff79fb66810737311478ad2ac98cc4ca6be8
+- pypi: git+https://github.com/ESMValGroup/ESMValCore.git?branch=format-recipe#13fdce63e069229c225366fc1ff7ade905203c9a
   name: esmvalcore
-  version: 2.16.0.dev139+gebb0ff79f
+  version: 2.16.0.dev147+g13fdce63e
   requires_dist:
   - aiohttp
   - cartopy
