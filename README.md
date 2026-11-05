@@ -100,8 +100,10 @@ authors and references it defines.
   Formatting removes comments, so recipes with comments are not formatted.
   This does not apply to the comments before the document start `---`, such as
   the name of the recipe, which are kept.
-  In Visual Studio Code, run **Format Document With...** and select
-  ESMValTool if another extension can also format YAML files.
+  In Visual Studio Code, click the **ESMValTool: Format Recipe** button at the
+  top of the editor, or run that command.
+  **Format Document** also works, but can use another extension that formats
+  YAML files; run **Format Document With...** to select ESMValTool.
 
 Other tools also use files named like recipes, for example `recipe.yaml` of
 conda-forge.

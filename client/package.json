@@ -26,8 +26,29 @@
         "command": "esmvaltool.restartLanguageServer",
         "title": "Restart Language Server",
         "category": "ESMValTool"
+      },
+      {
+        "command": "esmvaltool.formatRecipe",
+        "title": "Format Recipe",
+        "category": "ESMValTool",
+        "icon": "$(wand)"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "esmvaltool.formatRecipe",
+          "when": "resourceScheme == file && resourceLangId == yaml && resourceFilename =~ /^recipe.*\\.ya?ml$/",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "esmvaltool.formatRecipe",
+          "when": "resourceScheme == file && resourceLangId == yaml && resourceFilename =~ /^recipe.*\\.ya?ml$/"
+        }
+      ]
+    },
     "configurationDefaults": {
       "[yaml]": {
         "editor.quickSuggestions": {

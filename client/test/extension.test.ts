@@ -168,6 +168,23 @@ describe("ESMValTool extension", () => {
     }
   });
 
+  it("formats the recipe with the command", async () => {
+    await vscode.window.showTextDocument(document);
+    const text = document.getText();
+    await vscode.commands.executeCommand("esmvaltool.formatRecipe");
+    try {
+      assert.match(document.getText(), /^ {2}authors:\n {4}- andela_bouwe$/m);
+    } finally {
+      const undo = new vscode.WorkspaceEdit();
+      undo.replace(
+        document.uri,
+        document.validateRange(new vscode.Range(0, 0, document.lineCount, 0)),
+        text,
+      );
+      await vscode.workspace.applyEdit(undo);
+    }
+  });
+
   it("runs a single language server after overlapping restarts", async () => {
     await Promise.all([
       vscode.commands.executeCommand("esmvaltool.restartLanguageServer"),

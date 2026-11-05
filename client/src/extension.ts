@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { PythonExtension } from "@vscode/python-extension";
 import * as vscode from "vscode";
 import {
+  DocumentFormattingRequest,
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
@@ -54,6 +55,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
       "esmvaltool.restartLanguageServer",
       restart,
     ),
+    vscode.commands.registerCommand("esmvaltool.formatRecipe", formatRecipe),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("esmvaltool.languageServer")) {
         void restart();
@@ -155,6 +157,38 @@ function restart(): Promise<void> {
     await stop();
     await start();
   });
+}
+
+/**
+ * Format the recipe in the active editor with the language server.
+ *
+ * This asks the language server directly, because the Format Document command
+ * can use another extension that formats YAML files.
+ */
+async function formatRecipe(): Promise<void> {
+  const document = vscode.window.activeTextEditor?.document;
+  if (!document) {
+    return;
+  }
+  if (!client) {
+    void vscode.window.showErrorMessage(
+      "The recipe was not formatted, because the ESMValTool language server " +
+        "is not running.",
+    );
+    return;
+  }
+  const edits = await client.sendRequest(DocumentFormattingRequest.type, {
+    textDocument: { uri: document.uri.toString() },
+    options: { tabSize: 2, insertSpaces: true },
+  });
+  if (edits) {
+    const edit = new vscode.WorkspaceEdit();
+    edit.set(
+      document.uri,
+      await client.protocol2CodeConverter.asTextEdits(edits),
+    );
+    await vscode.workspace.applyEdit(edit);
+  }
 }
 
 /** Find the Python interpreter of the environment with ESMValTool. */
