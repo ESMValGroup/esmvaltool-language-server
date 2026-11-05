@@ -27,7 +27,14 @@ def _apply(text: str, edits: list[types.TextEdit]) -> str:
 
 @pytest.mark.parametrize(
     "text",
-    ["# Comment\na: 1\n", "a: 1  # Comment\n", "a:\n  # Comment\n  b: 1\n"],
+    [
+        "# Comment\na: 1\n",
+        "a: 1  # Comment\n",
+        "a:\n  # Comment\n  b: 1\n",
+        "# Header\n---\n# Comment\na: 1\n",
+        "# Header\n---\na: 1  # Comment\n",
+        "# Comment\na: 1\n---\n",
+    ],
 )
 def test_has_comments(text: str) -> None:
     assert has_comments(text)
@@ -41,6 +48,9 @@ def test_has_comments(text: str) -> None:
         "a: 'b # c'\n",
         'a: "b # c"\n',
         "a: |\n  b\n  # c\n",
+        "---\na: 1\n",
+        "# ESMValTool\n# recipe_a.yml\n---\na: 1\n",
+        "# Header\n\n  # Header\r\n---  \r\na: 1\n",
     ],
 )
 def test_has_no_comments(text: str) -> None:
@@ -55,6 +65,8 @@ def test_has_comments_invalid_yaml() -> None:
 FORMATTED = (
     "datasets:\n  - {dataset: CESM2, project: CMIP6}\n\ndiagnostics: {}\n"
 )
+UNFORMATTED = "datasets: [{project: CMIP6, dataset: CESM2}]\ndiagnostics: {}\n"
+HEADER = "# ESMValTool\n\n# recipe_a.yml\n---\n"
 
 
 @pytest.mark.parametrize(
@@ -71,6 +83,9 @@ FORMATTED = (
         ),
         (FORMATTED, FORMATTED),
         ("", "{}\n"),
+        # The part up to the document start is kept.
+        (f"---\n{FORMATTED}", f"---\n{FORMATTED}"),
+        (HEADER + UNFORMATTED, HEADER + FORMATTED),
     ],
 )
 def test_formatting_edits(text: str, expected: str) -> None:

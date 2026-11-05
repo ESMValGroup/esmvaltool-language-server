@@ -98,6 +98,8 @@ authors and references it defines.
   the sections of the recipe and the facets of the datasets and variables in
   a standard order.
   Formatting removes comments, so recipes with comments are not formatted.
+  This does not apply to the comments before the document start `---`, such as
+  the name of the recipe, which are kept.
   In Visual Studio Code, run **Format Document With...** and select
   ESMValTool if another extension can also format YAML files.
 

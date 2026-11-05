@@ -11,10 +11,21 @@ from lsprotocol import types
 
 # The start of a comment: a ``#`` at the start of a line or after whitespace.
 _COMMENT = re.compile(r"(?:^|(?<=\s))#", re.MULTILINE)
+# The document start marker and the comments and empty lines before it.
+_HEADER = re.compile(r"(?:[ \t]*(?:#.*)?\r?\n)*---[ \t]*\r?\n")
+
+
+def _split_header(text: str) -> tuple[str, str]:
+    """Split a recipe into the part up to the document start and the rest."""
+    match = _HEADER.match(text)
+    end = match.end() if match else 0
+    return text[:end], text[end:]
 
 
 def has_comments(text: str) -> bool:
-    """Check if a recipe contains comments.
+    """Check if a recipe contains comments that formatting would remove.
+
+    Comments before the document start marker ``---`` are kept by formatting.
 
     Parameters
     ----------
@@ -31,16 +42,17 @@ def has_comments(text: str) -> bool:
     yaml.YAMLError
         If the text is not valid YAML.
     """
+    _, body = _split_header(text)
     # A ``#`` in a scalar, e.g. in a quoted string or a block scalar, does
     # not start a comment.
     scalars = [
         (token.start_mark.index, token.end_mark.index)
-        for token in yaml.scan(text, Loader=yaml.SafeLoader)
+        for token in yaml.scan(body, Loader=yaml.SafeLoader)
         if isinstance(token, yaml.ScalarToken)
     ]
     return any(
         not any(start <= match.start() < end for start, end in scalars)
-        for match in _COMMENT.finditer(text)
+        for match in _COMMENT.finditer(body)
     )
 
 
@@ -56,6 +68,7 @@ def formatting_edits(text: str) -> list[types.TextEdit]:
 
     Only the lines that change are edited, so the editor keeps the position
     of the cursor in the other lines.
+    The part of the recipe up to the document start marker ``---`` is kept.
 
     Parameters
     ----------
@@ -73,7 +86,8 @@ def formatting_edits(text: str) -> list[types.TextEdit]:
         If the text is not valid YAML.
     """
     old = text.splitlines(keepends=True)
-    new = format_recipe(text).splitlines(keepends=True)
+    header, body = _split_header(text)
+    new = (header + format_recipe(body)).splitlines(keepends=True)
     matcher = difflib.SequenceMatcher(a=old, b=new, autojunk=False)
     return [
         types.TextEdit(
