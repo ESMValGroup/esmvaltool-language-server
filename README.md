@@ -94,6 +94,14 @@ authors and references it defines.
   If ESMValTool is installed, go to the definition of an author, project,
   theme, or realm in `config-references.yml`, or open the bibtex file of a
   reference.
+- Replacing datasets with glob patterns, such as
+  `{dataset: '*', project: CMIP6, exp: historical, ensemble: 'r*i1p1f1'}`,
+  by the datasets that have data for every variable group that uses them,
+  with a code lens above `datasets` or `additional_datasets`, or a code
+  action on that line in editors without code lenses.
+  The datasets are found in the same way as the values for completion, with
+  ranges of ensemble members such as `r(1:10)i1p1f1`.
+  This can take a minute if there are many datasets.
 
 Other tools also use files named like recipes, for example `recipe.yaml` of
 conda-forge.
