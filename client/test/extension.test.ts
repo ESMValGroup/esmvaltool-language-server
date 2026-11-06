@@ -145,6 +145,46 @@ describe("ESMValTool extension", () => {
     assert.equal(range.start.line, positionOf(document, "  pp:").line);
   });
 
+  it("formats the recipe", async () => {
+    const text = document.getText();
+    const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+      "vscode.executeFormatDocumentProvider",
+      document.uri,
+      { tabSize: 2, insertSpaces: true },
+    );
+    const edit = new vscode.WorkspaceEdit();
+    edit.set(document.uri, edits);
+    assert.ok(await vscode.workspace.applyEdit(edit));
+    try {
+      assert.match(document.getText(), /^ {2}authors:\n {4}- andela_bouwe$/m);
+    } finally {
+      const undo = new vscode.WorkspaceEdit();
+      undo.replace(
+        document.uri,
+        document.validateRange(new vscode.Range(0, 0, document.lineCount, 0)),
+        text,
+      );
+      await vscode.workspace.applyEdit(undo);
+    }
+  });
+
+  it("formats the recipe with the command", async () => {
+    await vscode.window.showTextDocument(document);
+    const text = document.getText();
+    await vscode.commands.executeCommand("esmvaltool.formatRecipe");
+    try {
+      assert.match(document.getText(), /^ {2}authors:\n {4}- andela_bouwe$/m);
+    } finally {
+      const undo = new vscode.WorkspaceEdit();
+      undo.replace(
+        document.uri,
+        document.validateRange(new vscode.Range(0, 0, document.lineCount, 0)),
+        text,
+      );
+      await vscode.workspace.applyEdit(undo);
+    }
+  });
+
   it("runs a single language server after overlapping restarts", async () => {
     await Promise.all([
       vscode.commands.executeCommand("esmvaltool.restartLanguageServer"),

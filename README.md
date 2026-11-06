@@ -94,6 +94,16 @@ authors and references it defines.
   If ESMValTool is installed, go to the definition of an author, project,
   theme, or realm in `config-references.yml`, or open the bibtex file of a
   reference.
+- Formatting of recipes with `esmvalcore.recipe.format_recipe`, which puts
+  the sections of the recipe and the facets of the datasets and variables in
+  a standard order.
+  Formatting removes comments, so recipes with comments are not formatted.
+  This does not apply to the comments before the document start `---`, such as
+  the name of the recipe, which are kept.
+  In Visual Studio Code, click the **ESMValTool: Format Recipe** button at the
+  top of the editor, or run that command.
+  **Format Document** also works, but can use another extension that formats
+  YAML files; run **Format Document With...** to select ESMValTool.
 
 Other tools also use files named like recipes, for example `recipe.yaml` of
 conda-forge.

@@ -578,3 +578,47 @@ async def test_other_files_have_no_features() -> None:
         types.DefinitionParams(text_document=document, position=position),
     )
     assert location is None
+
+
+@pytest.mark.asyncio
+async def test_formatting(tmp_path: Path) -> None:
+    published: asyncio.Queue[types.PublishDiagnosticsParams] = asyncio.Queue()
+    async with _client(published) as client:
+        messages: list[types.ShowMessageParams] = []
+
+        @client.feature(types.WINDOW_SHOW_MESSAGE)
+        def show(params: types.ShowMessageParams) -> None:
+            messages.append(params)
+
+        async def format_(text: str) -> list[types.TextEdit] | None:
+            uri = (tmp_path / f"recipe_{len(messages)}.yml").as_uri()
+            _open(client, uri, text)
+            return await client.text_document_formatting_async(
+                types.DocumentFormattingParams(
+                    text_document=types.TextDocumentIdentifier(uri=uri),
+                    options=types.FormattingOptions(
+                        tab_size=2,
+                        insert_spaces=True,
+                    ),
+                ),
+            )
+
+        # The emoji is one character, but two UTF-16 code units, which the
+        # client counts.
+        edits = await format_('documentation: {title: "🌍", description: x}')
+        assert list(edits or []) == [
+            types.TextEdit(
+                range=types.Range(
+                    start=types.Position(line=0, character=0),
+                    end=types.Position(line=0, character=44),
+                ),
+                new_text="documentation:\n  title: 🌍\n  description: x\n",
+            ),
+        ]
+        assert await format_("documentation: [\n") is None
+        assert not messages
+        assert await format_("documentation: {}  # Comment\n") is None
+        assert len(messages) == 1
+        assert "comments" in messages[0].message
+        assert await format_("package: {name: example}\n") is None
+        assert len(messages) == 1
