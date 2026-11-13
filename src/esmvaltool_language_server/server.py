@@ -8,6 +8,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
+import yaml
 from lsprotocol import types
 from pygls.lsp.server import LanguageServer
 
@@ -23,6 +24,10 @@ from esmvaltool_language_server.definition import definition
 from esmvaltool_language_server.detection import is_recipe
 from esmvaltool_language_server.diagnostics import check_recipe
 from esmvaltool_language_server.errata import ErrataService, errata_diagnostics
+from esmvaltool_language_server.formatting import (
+    formatting_edits,
+    has_comments,
+)
 from esmvaltool_language_server.hover import hover
 from esmvaltool_language_server.schema import MISSING, recipe_schema
 from esmvaltool_language_server.search import FacetSearch, unused_facets
@@ -420,3 +425,36 @@ def definition_(
             location.range,
         )
     return location
+
+
+@server.feature(types.TEXT_DOCUMENT_FORMATTING)
+def formatting(
+    ls: RecipeLanguageServer,
+    params: types.DocumentFormattingParams,
+) -> list[types.TextEdit] | None:
+    """Format a recipe, unless that would remove its comments."""
+    document = _recipe_document(ls, params.text_document.uri)
+    if document is None:
+        return None
+    try:
+        if has_comments(document.source):
+            ls.window_show_message(
+                types.ShowMessageParams(
+                    type=types.MessageType.Warning,
+                    message=(
+                        "The recipe was not formatted, because formatting "
+                        "would remove its comments."
+                    ),
+                ),
+            )
+            return None
+        edits = formatting_edits(document.source)
+    except yaml.YAMLError:
+        # The problems in the recipe already show the syntax error.
+        return None
+    for edit in edits:
+        edit.range = document.position_codec.range_to_client_units(
+            document.lines,
+            edit.range,
+        )
+    return edits
