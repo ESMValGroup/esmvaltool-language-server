@@ -138,6 +138,8 @@ def test_complete_mip(split_cursor: SplitCursor) -> None:
     labels = _complete(split_cursor, "mip: Amon", "mip: A|")
     assert "Amon" in labels
     assert "Omon" in labels
+    # The schema may also list the tables, but each is suggested once.
+    assert len(labels) == len(set(labels))
 
 
 def test_complete_branding_suffix(split_cursor: SplitCursor) -> None:
@@ -188,7 +190,7 @@ def test_complete_facet_values_not_found(split_cursor: SplitCursor) -> None:
         recipe_schema(),
         Options(facet_values=lambda *_: None),
     )
-    # The values that the schema allows are suggested instead.
+    # The tables of the project are suggested instead.
     assert "Omon" in [item.label for item in items]
 
 

@@ -232,3 +232,60 @@ def branding_suffixes(path: Path, recipe: object) -> dict[str, str]:
             for suffix, text in tables[table].get(str(short_name), {}).items():
                 suffixes.setdefault(suffix, text)
     return dict(sorted(suffixes.items()))
+
+
+def _tables(project: str) -> dict[str, str]:
+    """Get the names of the tables of a project with their descriptions."""
+    try:
+        tables = getattr(get_tables(CFG, project), "tables", None)
+    except ValueError:
+        return {}
+    return {
+        name: ", ".join(
+            f"{label}: `{value}`"
+            for label, value in (
+                ("Frequency", table.frequency),
+                ("Realm", table.realm),
+            )
+            if value
+        )
+        for name, table in (tables or {}).items()
+        if name
+    }
+
+
+def mips(path: Path, recipe: object) -> dict[str, str]:
+    """Get the MIP tables of the projects at a path in a recipe.
+
+    Parameters
+    ----------
+    path:
+        The path of a ``mip`` key in a variable group, dataset, or
+        supplementary variable, or of an item in a list of MIPs.
+    recipe:
+        The recipe.
+
+    Returns
+    -------
+    :
+        The names of the tables of the projects that apply, with their
+        frequency and realm, if known. The tables of all configured projects
+        if the project is not known or has no tables. Empty if the path is not that of a MIP.
+    """
+    if path and isinstance(path[-1], int):
+        path = path[:-1]
+    if not path or path[-1] != "mip":
+        return {}
+    projects = {
+        str(project)
+        for facets in dataset_facets(path[:-1], recipe)
+        if is_name(project := facets.get("project"))
+    }
+    result: dict[str, str] = {}
+    for names in (projects, CFG["projects"]):
+        for project in names:
+            for name, text in _tables(project).items():
+                result.setdefault(name, text)
+        if result:
+            break
+    return dict(sorted(result.items()))
