@@ -216,6 +216,142 @@ async def test_completion_without_facet_search() -> None:
     assert not result.is_incomplete
 
 
+POPULATE_RECIPE = (
+    "datasets:\n"
+    "  - {dataset: '*', project: CMIP6}\n"
+    "diagnostics:\n"
+    "  diag:\n"
+    "    variables:\n"
+    '      tas: {mip: Amon, alias: "🌍"}\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_lens(tmp_path: Path) -> None:
+    published: asyncio.Queue[types.PublishDiagnosticsParams] = asyncio.Queue()
+    async with _client(published) as client:
+        uri = (tmp_path / "recipe_test.yml").as_uri()
+        document = types.TextDocumentIdentifier(uri=uri)
+        _open(client, uri, POPULATE_RECIPE)
+        lenses = await client.text_document_code_lens_async(
+            types.CodeLensParams(text_document=document),
+        )
+        assert lenses is not None
+        assert [lens.range.start.line for lens in lenses] == [0]
+        command = lenses[0].command
+        assert command is not None
+        assert command.command == server.POPULATE_DATASETS
+        assert list(command.arguments or []) == [uri, ["datasets"]]
+
+
+class _PopulateServer(server.RecipeLanguageServer):
+    """A server that records the edits and messages it sends."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.protocol._workspace = Workspace(None)
+        self.protocol.client_capabilities = types.ClientCapabilities()
+        self.workspace.put_text_document(
+            types.TextDocumentItem(
+                uri="file:///recipe_test.yml",
+                language_id="yaml",
+                version=3,
+                text=text,
+            ),
+        )
+        self.edits: list[types.ApplyWorkspaceEditParams] = []
+        self.messages: list[types.ShowMessageParams] = []
+
+    async def workspace_apply_edit_async(
+        self,
+        params: types.ApplyWorkspaceEditParams,
+    ) -> types.ApplyWorkspaceEditResult:
+        self.edits.append(params)
+        return types.ApplyWorkspaceEditResult(applied=True)
+
+    def window_show_message(self, params: types.ShowMessageParams) -> None:
+        self.messages.append(params)
+
+
+class _DatasetSearch:
+    """Find CESM2 for any search."""
+
+    def submit(self, *_: object) -> Future[list[str]]:
+        future: Future[list[str]] = Future()
+        future.set_result(["CESM2"])
+        return future
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets() -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    ls.facet_search = _DatasetSearch()  # type: ignore[assignment]
+    uri = "file:///recipe_test.yml"
+    await server.populate_datasets(ls, uri, ["datasets"])
+    assert not ls.messages
+    [params] = ls.edits
+    [change] = params.edit.document_changes or []
+    assert isinstance(change, types.TextDocumentEdit)
+    assert change.text_document.version == 3
+    assert [edit.new_text for edit in change.edits] == [
+        "{dataset: CESM2, project: CMIP6}",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_fails() -> None:
+    ls = _PopulateServer(POPULATE_RECIPE.replace("diagnostics", "other"))
+    await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
+    assert not ls.edits
+    [message] = ls.messages
+    assert message.type == types.MessageType.Error
+    assert "No variable groups" in message.message
+
+
+@pytest.mark.parametrize(("line", "found"), [(0, True), (1, False)])
+def test_populate_datasets_action(line: int, *, found: bool) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    position = types.Position(line=line, character=0)
+    actions = server.code_action(
+        ls,
+        types.CodeActionParams(
+            text_document=types.TextDocumentIdentifier(
+                uri="file:///recipe_test.yml",
+            ),
+            range=types.Range(start=position, end=position),
+            context=types.CodeActionContext(diagnostics=[]),
+        ),
+    )
+    commands = [action.command for action in actions if action.command]
+    assert [c.command for c in commands] == (
+        [server.POPULATE_DATASETS] if found else []
+    )
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE.replace("diagnostics", "other"))
+    ls.protocol.client_capabilities = types.ClientCapabilities(
+        window=types.WindowClientCapabilities(work_done_progress=True),
+    )
+    progress = ls.work_done_progress
+    reported: list[object] = []
+
+    async def create_async(token: str) -> None:
+        reported.append(token)
+
+    monkeypatch.setattr(progress, "create_async", create_async)
+    monkeypatch.setattr(progress, "begin", lambda _, v: reported.append(v))
+    monkeypatch.setattr(progress, "end", lambda _, v: reported.append(v))
+    await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
+    assert [type(value) for value in reported[1:]] == [
+        types.WorkDoneProgressBegin,
+        types.WorkDoneProgressEnd,
+    ]
+
+
 _ERRATUM = types.Diagnostic(
     range=types.Range(
         start=types.Position(line=1, character=2),
@@ -578,3 +714,23 @@ async def test_other_files_have_no_features() -> None:
         types.DefinitionParams(text_document=document, position=position),
     )
     assert location is None
+
+
+def test_other_files_have_no_populate_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    monkeypatch.setattr(server, "is_recipe", lambda *_: False)
+    document = types.TextDocumentIdentifier(uri="file:///recipe_test.yml")
+    lenses = server.code_lens(ls, types.CodeLensParams(text_document=document))
+    assert lenses == []
+    position = types.Position(line=2, character=0)
+    actions = server.code_action(
+        ls,
+        types.CodeActionParams(
+            text_document=document,
+            range=types.Range(start=position, end=position),
+            context=types.CodeActionContext(diagnostics=[]),
+        ),
+    )
+    assert actions == []
