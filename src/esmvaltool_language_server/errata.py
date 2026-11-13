@@ -28,7 +28,7 @@ import yaml
 from esmvalcore.preprocessor._derive import get_required
 from lsprotocol import types
 
-from esmvaltool_language_server import cmor, esgf
+from esmvaltool_language_server import cmor, esgf, yaml_loader
 from esmvaltool_language_server.schema import child, data_at
 
 if TYPE_CHECKING:
@@ -546,7 +546,7 @@ def errata_diagnostics(
         at the line of each dataset with an erratum found so far.
     """
     try:
-        root = yaml.compose(text, Loader=yaml.SafeLoader)
+        root = yaml_loader.compose(text)
     except yaml.YAMLError:
         return
     lines = text.splitlines()
