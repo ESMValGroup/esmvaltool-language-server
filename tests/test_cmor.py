@@ -5,7 +5,11 @@ from textwrap import dedent
 import pytest
 import yaml
 
-from esmvaltool_language_server.cmor import branding_suffixes, dataset_facets
+from esmvaltool_language_server.cmor import (
+    branding_suffixes,
+    dataset_facets,
+    mips,
+)
 from esmvaltool_language_server.schema import MISSING
 
 RECIPE = yaml.safe_load(
@@ -169,3 +173,69 @@ def test_supplementary_facets(
     assert facets["project"] == "CMIP5"
     assert facets["dataset"] == "CanESM2"
     assert {key: facets[key] for key in expected} == expected
+
+
+def _recipe(**facets: object) -> dict[str, object]:
+    """Make a recipe with one variable group that has the given facets."""
+    return {
+        "diagnostics": {
+            "diag": {"variables": {"tas": {"mip": "Amon", **facets}}},
+        },
+    }
+
+
+TAS_MIP = ("diagnostics", "diag", "variables", "tas", "mip")
+
+
+def test_mips_project_in_datasets_section() -> None:
+    recipe = {
+        "datasets": [{"dataset": "A", "project": "CMIP6"}],
+        **_recipe(),
+    }
+    result = mips(TAS_MIP, recipe)
+    assert result["Amon"] == "Frequency: `mon`"
+    # Only the tables of CMIP6, not those of CMIP7.
+    assert "atmos" not in result
+
+
+def test_mips_project_in_dataset() -> None:
+    recipe = _recipe(
+        additional_datasets=[{"dataset": "A", "project": "CMIP7"}]
+    )
+    result = mips(TAS_MIP, recipe)
+    assert "atmos" in result
+    assert "Amon" not in result
+    path = (*TAS_MIP[:-1], "additional_datasets", 0, "mip")
+    assert mips(path, recipe) == result
+
+
+def test_mips_multiple_projects() -> None:
+    recipe = _recipe(
+        additional_datasets=[
+            {"dataset": "A", "project": "CMIP7"},
+            {"dataset": "B", "project": "CMIP6"},
+        ],
+    )
+    assert {"atmos", "Amon"} <= set(mips(TAS_MIP, recipe))
+
+
+def test_mips_in_list() -> None:
+    recipe = _recipe(project="CMIP7", mip=["atmos", ""])
+    assert "ocean" in mips((*TAS_MIP, 1), recipe)
+
+
+@pytest.mark.parametrize(
+    "recipe",
+    [_recipe(), _recipe(project="UNKNOWN"), _recipe(project="CM*")],
+)
+def test_mips_unknown_project(recipe: object) -> None:
+    # The tables of all projects are included.
+    assert {"Amon", "atmos"} <= set(mips(TAS_MIP, recipe))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [("diagnostics", "diag", "variables", "tas", "short_name"), ()],
+)
+def test_no_mips(path: tuple[str | int, ...]) -> None:
+    assert mips(path, _recipe(project="CMIP6")) == {}

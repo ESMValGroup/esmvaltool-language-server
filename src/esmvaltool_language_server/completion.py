@@ -257,6 +257,12 @@ def _value_items(
             (to_yaml(suffix), types.CompletionItemKind.EnumMember, text)
             for suffix, text in suffixes.items()
         ]
+    if tables := cmor.mips(path, recipe):
+        # The schema may list the tables of all projects.
+        candidates = [
+            (to_yaml(name), types.CompletionItemKind.EnumMember, text or None)
+            for name, text in tables.items()
+        ]
     if facet_values is not None and (
         available := _available_values(path, recipe, facet_values)
     ):
