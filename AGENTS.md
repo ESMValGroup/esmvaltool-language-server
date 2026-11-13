@@ -148,7 +148,7 @@ weak copyleft (e.g. LGPL, MPL 2.0).
 
 ## Pull requests
 
-- Follow the
+- Once a first release is made, follow the
   [ESMValTool AI policy](https://github.com/ESMValGroup/ESMValTool/blob/main/doc/sphinx/source/community/ai_policy.rst).
   In particular: do not open pull requests autonomously (a human must review
   the code and submit it), do not write pull request descriptions, issue
