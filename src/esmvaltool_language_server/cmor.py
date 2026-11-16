@@ -24,7 +24,6 @@ _COLUMNS = (
     "short_name",
     "branding_suffix",
     "frequency",
-    "realm",
     "description",
 )
 
@@ -255,12 +254,10 @@ def variables(project: str) -> pd.DataFrame:
     :
         A table with a row for each frequency of each variable in each MIP
         table, with the columns ``mip``, ``short_name``, ``branding_suffix``,
-        ``frequency``, ``realm``, and ``description``.
+        ``frequency``, and ``description``.
         If the CMOR table does not define the frequency, the frequencies of
         the controlled vocabulary are used, or an empty frequency if there
         is none.
-        The realm is the one that the extra facets of the project add for
-        all datasets, e.g. the MIP in CMIP7, or empty if they add none.
     """
     tables = getattr(_info(project), "tables", None) or {}
     rows = [
@@ -269,7 +266,6 @@ def variables(project: str) -> pd.DataFrame:
             short_name,
             suffix,
             frequency,
-            _extra_realm(project, mip, short_name),
             _describe(mip, name, vardef),
         )
         for mip, table in tables.items()
@@ -279,23 +275,6 @@ def variables(project: str) -> pd.DataFrame:
         for frequency in _frequencies(project, table, vardef)
     ]
     return pd.DataFrame(rows, columns=_COLUMNS).astype("category")
-
-
-def _extra_realm(project: str, mip: str, short_name: str) -> str:
-    """Get the realm that the extra facets add for all datasets."""
-    extra_facets = _as_mapping(
-        _as_mapping(CFG["projects"].get(project)).get("extra_facets"),
-    )
-    realm = ""
-    for mip_pattern, by_variable in _as_mapping(extra_facets.get("*")).items():
-        if not fnmatch.fnmatchcase(mip, str(mip_pattern)):
-            continue
-        for pattern, facets in _as_mapping(by_variable).items():
-            if fnmatch.fnmatchcase(short_name, str(pattern)) and is_name(
-                value := _as_mapping(facets).get("realm"),
-            ):
-                realm = str(value)
-    return realm
 
 
 def _describe(mip: str, name: str, vardef: VariableInfo) -> str:
@@ -320,7 +299,7 @@ def _alt_names(info: InfoBase | None, short_name: str) -> set[str]:
 def _matches(facets: dict[object, object]) -> pd.DataFrame:
     """Get the variables in the CMOR tables that match the facets.
 
-    An empty frequency or realm matches any value. Facets that are not
+    An empty frequency matches any value. Facets that are not
     a single name, e.g. a list or a glob pattern, select all values, except
     for the MIP, which can be a glob pattern.
     """
@@ -332,9 +311,8 @@ def _matches(facets: dict[object, object]) -> pd.DataFrame:
         selected &= table["short_name"].isin(names)
     if is_name(suffix := facets.get("branding_suffix")):
         selected &= table["branding_suffix"] == suffix
-    for facet in ("frequency", "realm"):
-        if is_name(value := facets.get(facet)):
-            selected &= table[facet].isin([value, ""])
+    if is_name(frequency := facets.get("frequency")):
+        selected &= table["frequency"].isin([frequency, ""])
     if isinstance(mip := facets.get("mip"), str):
         selected &= (
             table["mip"]
@@ -402,7 +380,7 @@ _ANY_TABLE = (
     "The variable is not in a CMOR table with this {facet}, but ESMValCore "
     "also looks for it in the other tables of the project because {reason}."
 )
-_FACET_NAMES = {"mip": "MIP", "frequency": "frequency", "realm": "realm"}
+_FACET_NAMES = {"mip": "MIP", "frequency": "frequency"}
 _VARIABLE_FACETS = frozenset({"short_name", "branding_suffix"})
 
 
@@ -493,14 +471,13 @@ def mips(path: Path, recipe: object) -> dict[str, str]:
 
 
 def table_values(path: Path, recipe: object) -> dict[str, str]:
-    """Get the frequencies or realms that apply at a path in a recipe.
+    """Get the frequencies that apply at a path in a recipe.
 
     Parameters
     ----------
     path:
-        The path of a ``frequency`` or ``realm`` key in a variable group,
-        dataset, or supplementary variable, or of an item in a list of
-        values.
+        The path of a ``frequency`` key in a variable group, dataset, or
+        supplementary variable, or of an item in a list of frequencies.
     recipe:
         The recipe.
 
@@ -511,10 +488,10 @@ def table_values(path: Path, recipe: object) -> dict[str, str]:
         apply that match the other facets. Values that ESMValCore only
         allows because the project is not strict or the variable is derived
         have a note, the others an empty text. Empty if the path is not that
-        of a frequency or realm, or the project is not known.
+        of a frequency, or the project is not known.
     """
     path, facet = _facet_at(path)
-    if facet not in {"frequency", "realm"}:
+    if facet != "frequency":
         return {}
     result: dict[str, str] = {}
     for facets in dataset_facets(path, recipe):

@@ -242,7 +242,7 @@ def _table_values(
     """Get the values of a facet from the CMOR tables, if it has them.
 
     The schema allows the branding suffixes of all variables, may list the
-    tables of all projects, and does not list frequencies or realms.
+    tables of all projects, and does not list frequencies.
     """
     if suffixes := cmor.branding_suffixes(path, recipe):
         found = suffixes
