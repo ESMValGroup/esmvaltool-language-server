@@ -14,17 +14,18 @@ of ESMValTool or ESMValCore if they have none.
 from __future__ import annotations
 
 import functools
-import json
 import logging
 import re
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
 import requests
-from esmvalcore.cmor.table import get_tables
-from esmvalcore.config import CFG
 
-from esmvaltool_language_server.cmor import dataset_facets, is_name
+from esmvaltool_language_server.cmor import (
+    controlled_vocabulary,
+    dataset_facets,
+    is_name,
+)
 from esmvaltool_language_server.esgf import intake_esgf_mapping
 
 if TYPE_CHECKING:
@@ -85,39 +86,6 @@ _EMD_JSON = f"{_EMD_URL}/model/{{model}}.json"
 
 # Stop waiting for the Essential Model Documentation after this many seconds.
 _EMD_TIMEOUT = 5
-
-
-@functools.cache
-def controlled_vocabulary(project: str) -> dict[str, object]:
-    """Load the controlled vocabulary of a project from its CMOR tables.
-
-    Parameters
-    ----------
-    project:
-        The project.
-
-    Returns
-    -------
-    :
-        The controlled vocabulary, or an empty mapping if the project has
-        none.
-    """
-    try:
-        paths = getattr(get_tables(CFG, project), "paths", [])
-    except ValueError:
-        return {}
-    vocabulary: dict[str, object] = {}
-    for path in paths:
-        for file in sorted(path.glob(f"{project}_CV.json")):
-            try:
-                content = json.loads(file.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if isinstance(content, dict) and isinstance(
-                content.get("CV"), dict
-            ):
-                vocabulary.update(content["CV"])
-    return vocabulary
 
 
 def _item(entry: object, key: str) -> object:

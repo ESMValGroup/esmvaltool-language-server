@@ -9,6 +9,7 @@ from esmvaltool_language_server.cmor import (
     branding_suffixes,
     dataset_facets,
     mips,
+    table_values,
     variables,
 )
 from esmvaltool_language_server.schema import MISSING
@@ -279,7 +280,7 @@ def test_mips_of_variable_in_any_table(
 ) -> None:
     result = mips(TAS_MIP, _recipe(**facets))
     assert "Omon" in result
-    assert "not in this table" in result["Omon"]
+    assert "not in a CMOR table with this MIP" in result["Omon"]
     assert reason in result["Omon"]
     assert result["Amon"] == "Frequency: `mon`"
 
@@ -295,6 +296,80 @@ def test_variables() -> None:
         (table["short_name"] == "tas")
         & (table["branding_suffix"] == TAS_ATMOS)
     ]
-    assert list(row["mip"]) == ["atmos"]
-    assert list(row["frequency"]) == [""]
+    assert set(row["mip"]) == {"atmos"}
+    # The frequencies of the controlled vocabulary, except fx.
+    assert "mon" in set(row["frequency"])
+    assert "fx" not in set(row["frequency"])
     assert variables("UNKNOWN").empty
+
+
+def _values(facet: str, **facets: object) -> dict[str, str]:
+    path = ("diagnostics", "diag", "variables", "tas", facet)
+    return table_values(
+        path, {"diagnostics": _recipe(**facets)["diagnostics"]}
+    )
+
+
+@pytest.mark.parametrize(
+    ("facet", "facets", "expected"),
+    [
+        ("frequency", {"project": "CMIP6"}, {"mon"}),
+        (
+            "frequency",
+            {"project": "CMIP6", "mip": "*"},
+            {"1hr", "3hrPt", "6hr", "6hrPt", "day", "mon", "subhrPt"},
+        ),
+        # CMIP7 tables do not define the frequency.
+        (
+            "frequency",
+            {"project": "CMIP7", "mip": "atmos"},
+            {"1hr", "3hr", "6hr", "day", "dec", "mon", "subhr", "yr"},
+        ),
+        # A variable without a time dimension.
+        (
+            "frequency",
+            {
+                "project": "CMIP7",
+                "mip": "land",
+                "short_name": "orog",
+                "branding_suffix": "ti-u-hxy-u",
+            },
+            {"fx"},
+        ),
+        ("realm", {"project": "CMIP6"}, {"atmos"}),
+        (
+            "realm",
+            {"project": "CMIP7", "mip": "*"},
+            {"atmos", "land", "landIce"},
+        ),
+    ],
+)
+def test_table_values(
+    facet: str,
+    facets: dict[str, object],
+    expected: set[str],
+) -> None:
+    result = _values(facet, **facets)
+    assert set(result) == expected
+    assert not any(result.values())
+
+
+def test_table_values_in_any_table() -> None:
+    # The frequency comes from the requested table, like in ESMValCore.
+    result = _values("frequency", project="native6")
+    assert result["mon"] == ""
+    assert "are not strict" in result["monC"]
+    assert "day" not in result
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("diagnostics", "diag", "variables", "tas", "mip"),
+        ("diagnostics", "diag", "variables", "tas", "frequency", 0),
+    ],
+)
+def test_no_table_values(path: tuple[str | int, ...]) -> None:
+    recipe = _recipe(project="CMIP6")
+    expected = {"mon": ""} if path[-1] == 0 else {}
+    assert table_values(path, recipe) == expected

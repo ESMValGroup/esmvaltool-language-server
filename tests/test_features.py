@@ -156,6 +156,23 @@ def test_complete_branding_suffix(split_cursor: SplitCursor) -> None:
     assert "tavg-u-hxy-u" not in labels
 
 
+def test_complete_frequency(split_cursor: SplitCursor) -> None:
+    old = "project: CMIP6\n        mip: Amon"
+    new = "project: CMIP7\n        mip: atmos\n        frequency: |"
+    text, position = split_cursor(RECIPE.replace(old, new))
+    recipe = yaml.safe_load(RECIPE.replace(old, new.replace("|", "")))
+    items = {
+        item.label: item
+        for item in completions(text, position, recipe, recipe_schema())
+    }
+    assert "mon" in items
+    # The variable has a time dimension.
+    assert "fx" not in items
+    documentation = items["mon"].documentation
+    assert isinstance(documentation, types.MarkupContent)
+    assert documentation.value.startswith("`mon`: Monthly samples.")
+
+
 @pytest.mark.parametrize("new", ["mip: |", "mip: [Amon, |]"])
 def test_complete_available_facet_values(
     split_cursor: SplitCursor,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import functools
+import json
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -13,7 +14,7 @@ from esmvalcore.config import CFG
 from esmvaltool_language_server.schema import child, data_at
 
 if TYPE_CHECKING:
-    from esmvalcore.cmor.table import InfoBase, VariableInfo
+    from esmvalcore.cmor.table import InfoBase, TableInfo, VariableInfo
 
     from esmvaltool_language_server.context import Path
 
@@ -183,12 +184,61 @@ def _info(project: str) -> InfoBase | None:
         return None
 
 
+@functools.cache
+def controlled_vocabulary(project: str) -> dict[str, object]:
+    """Load the controlled vocabulary of a project from its CMOR tables.
+
+    Parameters
+    ----------
+    project:
+        The project.
+
+    Returns
+    -------
+    :
+        The controlled vocabulary, or an empty mapping if the project has
+        none.
+    """
+    vocabulary: dict[str, object] = {}
+    for path in getattr(_info(project), "paths", []):
+        for file in sorted(path.glob(f"{project}_CV.json")):
+            try:
+                content = json.loads(file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(content, dict) and isinstance(
+                content.get("CV"), dict
+            ):
+                vocabulary.update(content["CV"])
+    return vocabulary
+
+
 def _split_name(name: str, vardef: VariableInfo) -> tuple[str, str]:
     """Split the name of a variable in a table into short name and suffix."""
     prefix = f"{vardef.short_name}_"
     if name.startswith(prefix):
         return vardef.short_name, name.removeprefix(prefix)
     return name, ""
+
+
+def _frequencies(
+    project: str,
+    table: TableInfo,
+    vardef: VariableInfo,
+) -> list[str]:
+    """Get the frequencies of a variable.
+
+    If the CMOR table does not define the frequency, e.g. in CMIP7, a
+    variable with a time dimension can have any frequency of the controlled
+    vocabulary except ``fx``, and a variable without one only ``fx``.
+    """
+    if frequency := vardef.frequency or table.frequency:
+        return [frequency]
+    choices = _as_mapping(controlled_vocabulary(project).get("frequency"))
+    has_time = any(name.startswith("time") for name in vardef.dimensions)
+    return [str(name) for name in choices if (name != "fx") == has_time] or [
+        ""
+    ]
 
 
 @functools.cache
@@ -203,25 +253,27 @@ def variables(project: str) -> pd.DataFrame:
     Returns
     -------
     :
-        A table with a row for each realm of each variable in each MIP table,
-        with the columns ``mip``, ``short_name``, ``branding_suffix``,
-        ``frequency``, ``realm``, and ``description``. The frequency is
-        empty if the CMOR table does not define it, e.g. in CMIP7, where
-        a variable can be at any frequency.
+        A table with a row for each frequency and realm of each variable in
+        each MIP table, with the columns ``mip``, ``short_name``,
+        ``branding_suffix``, ``frequency``, ``realm``, and ``description``.
+        If the CMOR table does not define the frequency, the frequencies of
+        the controlled vocabulary are used, or an empty frequency if there
+        is none.
     """
     tables = getattr(_info(project), "tables", None) or {}
     rows = [
         (
             mip,
             *_split_name(name, vardef),
-            vardef.frequency or table.frequency,
+            frequency,
             realm,
             _describe(mip, name, vardef),
         )
         for mip, table in tables.items()
         if mip
         for name, vardef in table.items()
-        for realm in vardef.modeling_realm or [table.realm]
+        for frequency in _frequencies(project, table, vardef)
+        for realm in vardef.modeling_realm or table.realm.split() or [""]
     ]
     return pd.DataFrame(rows, columns=_COLUMNS).astype("category")
 
@@ -248,10 +300,9 @@ def _alt_names(info: InfoBase | None, short_name: str) -> set[str]:
 def _matches(facets: dict[object, object]) -> pd.DataFrame:
     """Get the variables in the CMOR tables that match the facets.
 
-    The frequency only excludes variables that have a different frequency
-    in the CMOR table. Facets that are not a single name, e.g. a list or
-    a glob pattern, select all values, except for the MIP, which can be a
-    glob pattern.
+    An empty frequency in the CMOR tables matches any frequency. Facets
+    that are not a single name, e.g. a list or a glob pattern, select all
+    values, except for the MIP, which can be a glob pattern.
     """
     project = str(facets["project"])
     table = variables(project)
@@ -267,9 +318,7 @@ def _matches(facets: dict[object, object]) -> pd.DataFrame:
     if isinstance(mip := facets.get("mip"), str):
         selected &= (
             table["mip"]
-            .map(
-                lambda name: fnmatch.fnmatchcase(name, mip),
-            )
+            .map(lambda name: fnmatch.fnmatchcase(name, mip))
             .astype(bool)
         )
     return table[selected]
@@ -330,35 +379,58 @@ def _tables(project: str) -> dict[str, str]:
 
 
 _ANY_TABLE = (
-    "The variable is not in this table, but ESMValCore looks for it in the "
-    "other tables of the project because {reason}."
+    "The variable is not in a CMOR table with this {facet}, but ESMValCore "
+    "also looks for it in the other tables of the project because {reason}."
 )
+_FACET_NAMES = {"mip": "MIP", "frequency": "frequency", "realm": "realm"}
+_VARIABLE_FACETS = frozenset({"short_name", "branding_suffix"})
 
 
-def _project_mips(facets: dict[object, object]) -> dict[str, str]:
-    """Get the MIP tables of a project that the facets of a dataset allow.
-
-    Returns all tables of the project if the variable is not in any of them
-    or the short name is not known.
-    """
-    project = str(facets["project"])
-    tables = _tables(project)
-    facets = {key: value for key, value in facets.items() if key != "mip"}
-    found = set(_matches(facets)["mip"])
-    if not found:
-        return tables
-    reason = None
+def _any_table_reason(facets: dict[object, object]) -> str | None:
+    """Explain why ESMValCore looks for a variable in all tables, if it does."""
     if facets.get("derive", False) is True:
-        reason = "the variable is derived"
-    elif not getattr(_info(project), "strict", True):
-        reason = f"the CMOR checks of project {project} are not strict"
-    if reason is None:
-        return {name: tables[name] for name in found if name in tables}
-    note = _ANY_TABLE.format(reason=reason)
-    return {
-        name: text if name in found else f"{text}\n\n{note}".lstrip()
-        for name, text in tables.items()
+        return "the variable is derived"
+    project = facets["project"]
+    if not getattr(_info(str(project)), "strict", True):
+        return f"the CMOR checks of project {project} are not strict"
+    return None
+
+
+def _project_values(
+    facets: dict[object, object],
+    facet: str,
+) -> dict[str, str]:
+    """Get the values of a facet that the other facets of a dataset allow.
+
+    Returns the values with a note on why ESMValCore allows them, or an empty
+    note for the values of the tables that contain the variable. If no table
+    contains the variable, the values that the other facets allow are
+    returned without a note.
+    """
+    others = {key: value for key, value in facets.items() if key != facet}
+    found = set(_matches(others)[facet]) - {""}
+    any_variable = {
+        key: value
+        for key, value in others.items()
+        if key not in _VARIABLE_FACETS
     }
+    if not found:
+        return dict.fromkeys(set(_matches(any_variable)[facet]) - {""}, "")
+    result = dict.fromkeys(found, "")
+    if (reason := _any_table_reason(facets)) is not None:
+        note = _ANY_TABLE.format(facet=_FACET_NAMES[facet], reason=reason)
+        for value in set(_matches(any_variable)[facet]) - found - {""}:
+            result[value] = note
+    return result
+
+
+def _facet_at(path: Path) -> tuple[Path, str | None]:
+    """Get the path of the facets and the facet at a path."""
+    if path and isinstance(path[-1], int):
+        path = path[:-1]
+    if not path or not isinstance(path[-1], str):
+        return path, None
+    return path[:-1], path[-1]
 
 
 def mips(path: Path, recipe: object) -> dict[str, str]:
@@ -383,17 +455,50 @@ def mips(path: Path, recipe: object) -> dict[str, str]:
         The tables of all configured projects if the project is not known
         or has no tables. Empty if the path is not that of a MIP.
     """
-    if path and isinstance(path[-1], int):
-        path = path[:-1]
-    if not path or path[-1] != "mip":
+    path, facet = _facet_at(path)
+    if facet != "mip":
         return {}
     result: dict[str, str] = {}
-    for facets in dataset_facets(path[:-1], recipe):
-        if is_name(facets.get("project")):
-            for name, text in _project_mips(facets).items():
+    for facets in dataset_facets(path, recipe):
+        if is_name(project := facets.get("project")):
+            tables = _tables(str(project))
+            for name, note in _project_values(facets, "mip").items():
+                text = "\n\n".join(filter(None, [tables.get(name), note]))
                 result.setdefault(name, text)
     if not result:
         for project in CFG["projects"]:
             for name, text in _tables(project).items():
                 result.setdefault(name, text)
+    return dict(sorted(result.items()))
+
+
+def table_values(path: Path, recipe: object) -> dict[str, str]:
+    """Get the frequencies or realms that apply at a path in a recipe.
+
+    Parameters
+    ----------
+    path:
+        The path of a ``frequency`` or ``realm`` key in a variable group,
+        dataset, or supplementary variable, or of an item in a list of
+        values.
+    recipe:
+        The recipe.
+
+    Returns
+    -------
+    :
+        The values of the variables in the CMOR tables of the projects that
+        apply that match the other facets. Values that ESMValCore only
+        allows because the project is not strict or the variable is derived
+        have a note, the others an empty text. Empty if the path is not that
+        of a frequency or realm, or the project is not known.
+    """
+    path, facet = _facet_at(path)
+    if facet not in {"frequency", "realm"}:
+        return {}
+    result: dict[str, str] = {}
+    for facets in dataset_facets(path, recipe):
+        if is_name(facets.get("project")):
+            for value, note in _project_values(facets, facet).items():
+                result.setdefault(value, note)
     return dict(sorted(result.items()))

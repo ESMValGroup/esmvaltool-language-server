@@ -21,9 +21,9 @@ authors and references it defines.
   arguments, invalid values, missing keys, unknown projects and MIP tables,
   keys that are defined more than once, and YAML syntax errors.
 - Completion of keys and values: preprocessor functions and their
-  arguments, facets, projects, the MIP tables of the project that contain
-  the variable, and the branding suffixes of the variable; the preprocessors and tasks defined in
-  the recipe, and the datasets of the variable group for
+  arguments, facets, projects, and the MIP tables, branding suffixes,
+  frequencies, and realms of the variable from the CMOR tables; the
+  preprocessors and tasks defined in the recipe, and the datasets of the variable group for
   `reference_dataset` and `alternative_dataset`; and, if
   ESMValTool is installed, its diagnostic scripts, authors, and references.
   Keys are inserted with the arguments they require or their default value.
