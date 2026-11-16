@@ -9,6 +9,7 @@ from esmvaltool_language_server.cmor import (
     branding_suffixes,
     dataset_facets,
     mips,
+    variables,
 )
 from esmvaltool_language_server.schema import MISSING
 
@@ -221,7 +222,7 @@ def test_mips_multiple_projects() -> None:
 
 def test_mips_in_list() -> None:
     recipe = _recipe(project="CMIP7", mip=["atmos", ""])
-    assert "ocean" in mips((*TAS_MIP, 1), recipe)
+    assert "landIce" in mips((*TAS_MIP, 1), recipe)
 
 
 @pytest.mark.parametrize(
@@ -239,3 +240,61 @@ def test_mips_unknown_project(recipe: object) -> None:
 )
 def test_no_mips(path: tuple[str | int, ...]) -> None:
     assert mips(path, _recipe(project="CMIP6")) == {}
+
+
+@pytest.mark.parametrize(
+    ("facets", "expected"),
+    [
+        # Only the tables that contain the variable.
+        ({"project": "CMIP7"}, {"atmos", "landIce"}),
+        ({"project": "CMIP6", "frequency": "day"}, {"day"}),
+        # CMIP7 tables do not define the frequency.
+        ({"project": "CMIP7", "frequency": "day"}, {"atmos", "landIce"}),
+        ({"project": "CMIP6", "realm": "landIce"}, {"ImonAnt", "ImonGre"}),
+        (
+            {"project": "CMIP7", "branding_suffix": TAS_LAND_ICE},
+            {"landIce"},
+        ),
+        # An alternative name of a variable in the table.
+        ({"project": "CMIP6", "short_name": "sic"}, {"SImon", "SIday"}),
+    ],
+)
+def test_mips_of_variable(
+    facets: dict[str, object],
+    expected: set[str],
+) -> None:
+    assert set(mips(TAS_MIP, _recipe(**facets))) == expected
+
+
+@pytest.mark.parametrize(
+    ("facets", "reason"),
+    [
+        ({"project": "native6"}, "are not strict"),
+        ({"project": "CMIP6", "derive": True}, "is derived"),
+    ],
+)
+def test_mips_of_variable_in_any_table(
+    facets: dict[str, object],
+    reason: str,
+) -> None:
+    result = mips(TAS_MIP, _recipe(**facets))
+    assert "Omon" in result
+    assert "not in this table" in result["Omon"]
+    assert reason in result["Omon"]
+    assert result["Amon"] == "Frequency: `mon`"
+
+
+def test_mips_of_unknown_variable() -> None:
+    result = mips(TAS_MIP, _recipe(project="CMIP6", short_name="unknown"))
+    assert {"Amon", "Omon"} <= set(result)
+
+
+def test_variables() -> None:
+    table = variables("CMIP7")
+    row = table[
+        (table["short_name"] == "tas")
+        & (table["branding_suffix"] == TAS_ATMOS)
+    ]
+    assert list(row["mip"]) == ["atmos"]
+    assert list(row["frequency"]) == [""]
+    assert variables("UNKNOWN").empty

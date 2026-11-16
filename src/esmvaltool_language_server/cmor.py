@@ -6,17 +6,26 @@ import fnmatch
 import functools
 from typing import TYPE_CHECKING
 
+import pandas as pd
 from esmvalcore.cmor.table import get_tables
 from esmvalcore.config import CFG
 
 from esmvaltool_language_server.schema import child, data_at
 
 if TYPE_CHECKING:
-    from esmvalcore.cmor.table import VariableInfo
+    from esmvalcore.cmor.table import InfoBase, VariableInfo
 
     from esmvaltool_language_server.context import Path
 
 _GLOB_CHARS = frozenset("*?[")
+_COLUMNS = (
+    "mip",
+    "short_name",
+    "branding_suffix",
+    "frequency",
+    "realm",
+    "description",
+)
 
 
 def is_name(value: object) -> bool:
@@ -167,26 +176,54 @@ def dataset_facets(path: Path, recipe: object) -> list[dict[object, object]]:
     return facets
 
 
-@functools.cache
-def _branded_variables(project: str) -> dict[str, dict[str, dict[str, str]]]:
-    """Get the branded variables in each table of a project.
-
-    Returns a mapping from the table to the short name to the branding
-    suffix to a description of the variable.
-    """
+def _info(project: str) -> InfoBase | None:
     try:
-        tables = getattr(get_tables(CFG, project), "tables", None)
+        return get_tables(CFG, project)
     except ValueError:
-        return {}
-    result: dict[str, dict[str, dict[str, str]]] = {}
-    for mip, table in (tables or {}).items():
-        for name, vardef in table.items():
-            prefix = f"{vardef.short_name}_"
-            if name.startswith(prefix):
-                result.setdefault(mip, {}).setdefault(vardef.short_name, {})[
-                    name.removeprefix(prefix)
-                ] = _describe(mip, name, vardef)
-    return result
+        return None
+
+
+def _split_name(name: str, vardef: VariableInfo) -> tuple[str, str]:
+    """Split the name of a variable in a table into short name and suffix."""
+    prefix = f"{vardef.short_name}_"
+    if name.startswith(prefix):
+        return vardef.short_name, name.removeprefix(prefix)
+    return name, ""
+
+
+@functools.cache
+def variables(project: str) -> pd.DataFrame:
+    """Get the variables in the CMOR tables of a project.
+
+    Parameters
+    ----------
+    project:
+        The project.
+
+    Returns
+    -------
+    :
+        A table with a row for each realm of each variable in each MIP table,
+        with the columns ``mip``, ``short_name``, ``branding_suffix``,
+        ``frequency``, ``realm``, and ``description``. The frequency is
+        empty if the CMOR table does not define it, e.g. in CMIP7, where
+        a variable can be at any frequency.
+    """
+    tables = getattr(_info(project), "tables", None) or {}
+    rows = [
+        (
+            mip,
+            *_split_name(name, vardef),
+            vardef.frequency or table.frequency,
+            realm,
+            _describe(mip, name, vardef),
+        )
+        for mip, table in tables.items()
+        if mip
+        for name, vardef in table.items()
+        for realm in vardef.modeling_realm or [table.realm]
+    ]
+    return pd.DataFrame(rows, columns=_COLUMNS).astype("category")
 
 
 def _describe(mip: str, name: str, vardef: VariableInfo) -> str:
@@ -197,6 +234,45 @@ def _describe(mip: str, name: str, vardef: VariableInfo) -> str:
             f"Dimensions: `{' '.join(vardef.dimensions)}`",
         ]
     )
+
+
+def _alt_names(info: InfoBase | None, short_name: str) -> set[str]:
+    """Get a short name and its alternative names, like ESMValCore."""
+    names = {short_name}
+    for group in getattr(info, "alt_names", None) or []:
+        if short_name in group:
+            names.update(group)
+    return names
+
+
+def _matches(facets: dict[object, object]) -> pd.DataFrame:
+    """Get the variables in the CMOR tables that match the facets.
+
+    The frequency only excludes variables that have a different frequency
+    in the CMOR table. Facets that are not a single name, e.g. a list or
+    a glob pattern, select all values, except for the MIP, which can be a
+    glob pattern.
+    """
+    project = str(facets["project"])
+    table = variables(project)
+    selected = pd.Series(data=True, index=table.index)
+    if is_name(short_name := facets.get("short_name")):
+        names = _alt_names(_info(project), str(short_name))
+        selected &= table["short_name"].isin(names)
+    for facet in ("branding_suffix", "realm"):
+        if is_name(value := facets.get(facet)):
+            selected &= table[facet] == value
+    if is_name(frequency := facets.get("frequency")):
+        selected &= table["frequency"].isin([frequency, ""])
+    if isinstance(mip := facets.get("mip"), str):
+        selected &= (
+            table["mip"]
+            .map(
+                lambda name: fnmatch.fnmatchcase(name, mip),
+            )
+            .astype(bool)
+        )
+    return table[selected]
 
 
 def branding_suffixes(path: Path, recipe: object) -> dict[str, str]:
@@ -213,33 +289,32 @@ def branding_suffixes(path: Path, recipe: object) -> dict[str, str]:
     -------
     :
         The branding suffixes, with a description of each variable, of the
-        combinations of project, MIP, and short name that apply. Empty if
-        these could not be found.
+        variables in the CMOR tables that match the facets of the variable
+        group or datasets. Empty if these could not be found.
     """
     if not path or path[-1] != "branding_suffix":
         return {}
     suffixes: dict[str, str] = {}
     for facets in dataset_facets(path[:-1], recipe):
-        project = facets.get("project")
-        mip = facets.get("mip")
-        short_name = facets.get("short_name")
-        if not (is_name(project) and is_name(short_name)) or not isinstance(
-            mip, str
+        if not (
+            is_name(facets.get("project"))
+            and is_name(facets.get("short_name"))
+            and isinstance(facets.get("mip"), str)
         ):
             continue
-        tables = _branded_variables(str(project))
-        for table in [t for t in tables if fnmatch.fnmatchcase(t, mip)]:
-            for suffix, text in tables[table].get(str(short_name), {}).items():
+        facets.pop("branding_suffix", None)
+        found = _matches(facets)
+        for suffix, text in zip(
+            found["branding_suffix"], found["description"], strict=True
+        ):
+            if suffix:
                 suffixes.setdefault(suffix, text)
     return dict(sorted(suffixes.items()))
 
 
 def _tables(project: str) -> dict[str, str]:
     """Get the names of the tables of a project with their descriptions."""
-    try:
-        tables = getattr(get_tables(CFG, project), "tables", None)
-    except ValueError:
-        return {}
+    tables = getattr(_info(project), "tables", None)
     return {
         name: ", ".join(
             f"{label}: `{value}`"
@@ -254,8 +329,40 @@ def _tables(project: str) -> dict[str, str]:
     }
 
 
+_ANY_TABLE = (
+    "The variable is not in this table, but ESMValCore looks for it in the "
+    "other tables of the project because {reason}."
+)
+
+
+def _project_mips(facets: dict[object, object]) -> dict[str, str]:
+    """Get the MIP tables of a project that the facets of a dataset allow.
+
+    Returns all tables of the project if the variable is not in any of them
+    or the short name is not known.
+    """
+    project = str(facets["project"])
+    tables = _tables(project)
+    facets = {key: value for key, value in facets.items() if key != "mip"}
+    found = set(_matches(facets)["mip"])
+    if not found:
+        return tables
+    reason = None
+    if facets.get("derive", False) is True:
+        reason = "the variable is derived"
+    elif not getattr(_info(project), "strict", True):
+        reason = f"the CMOR checks of project {project} are not strict"
+    if reason is None:
+        return {name: tables[name] for name in found if name in tables}
+    note = _ANY_TABLE.format(reason=reason)
+    return {
+        name: text if name in found else f"{text}\n\n{note}".lstrip()
+        for name, text in tables.items()
+    }
+
+
 def mips(path: Path, recipe: object) -> dict[str, str]:
-    """Get the MIP tables of the projects at a path in a recipe.
+    """Get the MIP tables that apply at a path in a recipe.
 
     Parameters
     ----------
@@ -268,24 +375,25 @@ def mips(path: Path, recipe: object) -> dict[str, str]:
     Returns
     -------
     :
-        The names of the tables of the projects that apply, with their
-        frequency and realm, if known. The tables of all configured projects
-        if the project is not known or has no tables. Empty if the path is not that of a MIP.
+        The names of the tables, with their frequency and realm, if known,
+        of the projects that apply that contain the variable and match the
+        other facets. If the project is not strict or the variable is
+        derived, ESMValCore also looks for the variable in the other tables
+        of the project, so these are also included, with a note.
+        The tables of all configured projects if the project is not known
+        or has no tables. Empty if the path is not that of a MIP.
     """
     if path and isinstance(path[-1], int):
         path = path[:-1]
     if not path or path[-1] != "mip":
         return {}
-    projects = {
-        str(project)
-        for facets in dataset_facets(path[:-1], recipe)
-        if is_name(project := facets.get("project"))
-    }
     result: dict[str, str] = {}
-    for names in (projects, CFG["projects"]):
-        for project in names:
+    for facets in dataset_facets(path[:-1], recipe):
+        if is_name(facets.get("project")):
+            for name, text in _project_mips(facets).items():
+                result.setdefault(name, text)
+    if not result:
+        for project in CFG["projects"]:
             for name, text in _tables(project).items():
                 result.setdefault(name, text)
-        if result:
-            break
     return dict(sorted(result.items()))
