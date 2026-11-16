@@ -195,7 +195,8 @@ def test_mips_project_in_datasets_section() -> None:
         **_recipe(),
     }
     result = mips(TAS_MIP, recipe)
-    assert result["Amon"] == "Frequency: `mon`"
+    # Newer versions of ESMValCore also give the realm.
+    assert result["Amon"].startswith("Frequency: `mon`")
     # Only the tables of CMIP6, not those of CMIP7.
     assert "atmos" not in result
 
@@ -298,7 +299,8 @@ def test_mips_of_variable_in_any_table(
     assert "Omon" in result
     assert "not in a CMOR table with this MIP" in result["Omon"]
     assert reason in result["Omon"]
-    assert result["Amon"] == "Frequency: `mon`"
+    assert result["Amon"].startswith("Frequency: `mon`")
+    assert "not in a CMOR table" not in result["Amon"]
 
 
 def test_mips_of_unknown_variable() -> None:
