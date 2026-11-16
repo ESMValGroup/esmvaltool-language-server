@@ -251,7 +251,23 @@ def test_no_mips(path: tuple[str | int, ...]) -> None:
         ({"project": "CMIP6", "frequency": "day"}, {"day"}),
         # CMIP7 tables do not define the frequency.
         ({"project": "CMIP7", "frequency": "day"}, {"atmos", "landIce"}),
-        ({"project": "CMIP6", "realm": "landIce"}, {"ImonAnt", "ImonGre"}),
+        ({"project": "CMIP7", "realm": "landIce"}, {"landIce"}),
+        # CMIP6 has no realm in the extra facets, so it selects all tables.
+        (
+            {"project": "CMIP6", "realm": "landIce"},
+            {
+                "3hr",
+                "6hrPlev",
+                "6hrPlevPt",
+                "AERhr",
+                "Amon",
+                "CFsubhr",
+                "Esubhr",
+                "ImonAnt",
+                "ImonGre",
+                "day",
+            },
+        ),
         (
             {"project": "CMIP7", "branding_suffix": TAS_LAND_ICE},
             {"landIce"},
@@ -336,12 +352,16 @@ def _values(facet: str, **facets: object) -> dict[str, str]:
             },
             {"fx"},
         ),
-        ("realm", {"project": "CMIP6"}, {"atmos"}),
+        # The extra facets of CMIP7 add the MIP as the realm.
+        ("realm", {"project": "CMIP7", "mip": "*"}, {"atmos", "landIce"}),
+        # Not the other realms of the variable in the CMOR table.
         (
             "realm",
-            {"project": "CMIP7", "mip": "*"},
-            {"atmos", "land", "landIce"},
+            {"project": "CMIP7", "mip": "*", "short_name": "sithick"},
+            {"seaIce"},
         ),
+        # The extra facets of CMIP6 add no realm.
+        ("realm", {"project": "CMIP6", "mip": "*"}, set()),
     ],
 )
 def test_table_values(

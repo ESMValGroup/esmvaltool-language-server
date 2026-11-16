@@ -253,29 +253,49 @@ def variables(project: str) -> pd.DataFrame:
     Returns
     -------
     :
-        A table with a row for each frequency and realm of each variable in
-        each MIP table, with the columns ``mip``, ``short_name``,
-        ``branding_suffix``, ``frequency``, ``realm``, and ``description``.
+        A table with a row for each frequency of each variable in each MIP
+        table, with the columns ``mip``, ``short_name``, ``branding_suffix``,
+        ``frequency``, ``realm``, and ``description``.
         If the CMOR table does not define the frequency, the frequencies of
         the controlled vocabulary are used, or an empty frequency if there
         is none.
+        The realm is the one that the extra facets of the project add for
+        all datasets, e.g. the MIP in CMIP7, or empty if they add none.
     """
     tables = getattr(_info(project), "tables", None) or {}
     rows = [
         (
             mip,
-            *_split_name(name, vardef),
+            short_name,
+            suffix,
             frequency,
-            realm,
+            _extra_realm(project, mip, short_name),
             _describe(mip, name, vardef),
         )
         for mip, table in tables.items()
         if mip
         for name, vardef in table.items()
+        for short_name, suffix in [_split_name(name, vardef)]
         for frequency in _frequencies(project, table, vardef)
-        for realm in vardef.modeling_realm or table.realm.split() or [""]
     ]
     return pd.DataFrame(rows, columns=_COLUMNS).astype("category")
+
+
+def _extra_realm(project: str, mip: str, short_name: str) -> str:
+    """Get the realm that the extra facets add for all datasets."""
+    extra_facets = _as_mapping(
+        _as_mapping(CFG["projects"].get(project)).get("extra_facets"),
+    )
+    realm = ""
+    for mip_pattern, by_variable in _as_mapping(extra_facets.get("*")).items():
+        if not fnmatch.fnmatchcase(mip, str(mip_pattern)):
+            continue
+        for pattern, facets in _as_mapping(by_variable).items():
+            if fnmatch.fnmatchcase(short_name, str(pattern)) and is_name(
+                value := _as_mapping(facets).get("realm"),
+            ):
+                realm = str(value)
+    return realm
 
 
 def _describe(mip: str, name: str, vardef: VariableInfo) -> str:
@@ -300,9 +320,9 @@ def _alt_names(info: InfoBase | None, short_name: str) -> set[str]:
 def _matches(facets: dict[object, object]) -> pd.DataFrame:
     """Get the variables in the CMOR tables that match the facets.
 
-    An empty frequency in the CMOR tables matches any frequency. Facets
-    that are not a single name, e.g. a list or a glob pattern, select all
-    values, except for the MIP, which can be a glob pattern.
+    An empty frequency or realm matches any value. Facets that are not
+    a single name, e.g. a list or a glob pattern, select all values, except
+    for the MIP, which can be a glob pattern.
     """
     project = str(facets["project"])
     table = variables(project)
@@ -310,11 +330,11 @@ def _matches(facets: dict[object, object]) -> pd.DataFrame:
     if is_name(short_name := facets.get("short_name")):
         names = _alt_names(_info(project), str(short_name))
         selected &= table["short_name"].isin(names)
-    for facet in ("branding_suffix", "realm"):
+    if is_name(suffix := facets.get("branding_suffix")):
+        selected &= table["branding_suffix"] == suffix
+    for facet in ("frequency", "realm"):
         if is_name(value := facets.get(facet)):
-            selected &= table[facet] == value
-    if is_name(frequency := facets.get("frequency")):
-        selected &= table["frequency"].isin([frequency, ""])
+            selected &= table[facet].isin([value, ""])
     if isinstance(mip := facets.get("mip"), str):
         selected &= (
             table["mip"]
