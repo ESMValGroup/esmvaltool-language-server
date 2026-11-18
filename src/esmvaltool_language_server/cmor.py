@@ -8,7 +8,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pandas as pd
-from esmvalcore.cmor.table import get_tables
+from esmvalcore.cmor.table import NoInfo, get_tables
 from esmvalcore.config import CFG
 
 from esmvaltool_language_server.schema import child, data_at
@@ -176,11 +176,12 @@ def dataset_facets(path: Path, recipe: object) -> list[dict[object, object]]:
     return facets
 
 
-def _info(project: str) -> InfoBase | None:
+def _info(project: str) -> InfoBase:
+    """Get the CMOR tables of a project, or empty tables if it has none."""
     try:
         return get_tables(CFG, project)
     except ValueError:
-        return None
+        return NoInfo()
 
 
 @functools.cache
@@ -199,7 +200,7 @@ def controlled_vocabulary(project: str) -> dict[str, object]:
         none.
     """
     vocabulary: dict[str, object] = {}
-    for path in getattr(_info(project), "paths", []):
+    for path in _info(project).paths:
         for file in sorted(path.glob(f"{project}_CV.json")):
             try:
                 content = json.loads(file.read_text(encoding="utf-8"))
@@ -259,7 +260,7 @@ def variables(project: str) -> pd.DataFrame:
         the controlled vocabulary are used, or an empty frequency if there
         is none.
     """
-    tables = getattr(_info(project), "tables", None) or {}
+    tables = _info(project).tables
     rows = [
         (
             mip,
@@ -287,10 +288,10 @@ def _describe(mip: str, name: str, vardef: VariableInfo) -> str:
     )
 
 
-def _alt_names(info: InfoBase | None, short_name: str) -> set[str]:
+def _alt_names(info: InfoBase, short_name: str) -> set[str]:
     """Get a short name and its alternative names, like ESMValCore."""
     names = {short_name}
-    for group in getattr(info, "alt_names", None) or []:
+    for group in info.alt_names:
         if short_name in group:
             names.update(group)
     return names
@@ -361,7 +362,7 @@ def branding_suffixes(path: Path, recipe: object) -> dict[str, str]:
 
 def _tables(project: str) -> dict[str, str]:
     """Get the names of the tables of a project with their descriptions."""
-    tables = getattr(_info(project), "tables", None)
+    tables = _info(project).tables
     return {
         name: ", ".join(
             f"{label}: `{value}`"
@@ -371,7 +372,7 @@ def _tables(project: str) -> dict[str, str]:
             )
             if value
         )
-        for name, table in (tables or {}).items()
+        for name, table in tables.items()
         if name
     }
 
@@ -389,7 +390,7 @@ def _any_table_reason(facets: dict[object, object]) -> str | None:
     if facets.get("derive", False) is True:
         return "the variable is derived"
     project = facets["project"]
-    if not getattr(_info(str(project)), "strict", True):
+    if not _info(str(project)).strict:
         return f"the CMOR checks of project {project} are not strict"
     return None
 
