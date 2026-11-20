@@ -30,6 +30,7 @@ import functools
 import logging
 import re
 import threading
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -50,7 +51,7 @@ from esmvaltool_language_server import timerange
 from esmvaltool_language_server.cmor import is_name
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Callable, Iterable, Mapping
 
     Index = GlobusESGFIndex | SolrESGFIndex | STACESGFIndex
     Query = dict[str, list[str]]
@@ -62,6 +63,9 @@ _INTAKE_ESGF_DATA_SOURCE = "esmvalcore.io.intake_esgf.IntakeESGFDataSource"
 # Stop waiting for an index after this many seconds.
 TIMEOUT = 10
 
+# Do not ask an index again for this many seconds if it cannot be reached.
+RETRY_AFTER = 60
+
 # The maximum number of values of a facet to get from an index.
 _MAX_VALUES = 1000
 
@@ -71,6 +75,16 @@ _MAX_DATASETS = 100
 
 # Errors when an index cannot be reached or gives an unexpected answer.
 _ERRORS = (requests.RequestException, globus_sdk.GlobusError, LookupError)
+
+# Errors when an index cannot be reached.
+_UNREACHABLE = (
+    requests.ConnectionError,
+    requests.Timeout,
+    globus_sdk.NetworkError,
+)
+
+# When to ask an index again that could not be reached, by index.
+_RETRY_AT: dict[Index, float] = {}
 
 # The number of requests that failed, by source of the data.
 _FAILURES: Counter[str] = Counter()
@@ -206,6 +220,17 @@ def _mapping(index: Index, project: str) -> _Mapping | None:
     return intake_esgf_mapping(project)
 
 
+def _session() -> requests.Session:
+    """Create a session to send requests to an index.
+
+    The sessions of intake-esgf share a cache in an SQLite database that
+    does not support sending requests from several threads at once, so a
+    session without a cache is used. The values are remembered by
+    :class:`esmvaltool_language_server.search.FacetSearch` instead.
+    """
+    return requests.Session()
+
+
 @functools.cache
 def _indices() -> list[Index]:
     """Get the indices that are enabled in the intake-esgf configuration."""
@@ -221,6 +246,7 @@ def _indices() -> list[Index]:
             if enabled
         )
     for index in indices:
+        index.session = _session()
         if isinstance(index, GlobusESGFIndex):
             index.client.transport.http_timeout = TIMEOUT
     return indices
@@ -301,7 +327,7 @@ class _Collection:
 @functools.cache
 def _stac_collection(url: str, project: str) -> _Collection | None:
     """Find the collection of a project in a STAC catalog."""
-    session = intake_esgf.conf.get_cached_session()
+    session = _session()
 
     def get(path: str) -> dict[str, Any]:
         response = session.get(path, timeout=TIMEOUT)
@@ -439,10 +465,59 @@ def _stac_values(
     ):
         return {}
     response.raise_for_status()
-    return {
+    counts = {
         bucket["key"]: bucket["frequency"]
         for bucket in response.json()["aggregations"][0]["buckets"]
     }
+    # Some indices cannot aggregate some properties, e.g. the version.
+    return counts or _stac_item_values(index, collection, project, query, name)
+
+
+def _stac_item_values(
+    index: STACESGFIndex,
+    collection: _Collection,
+    project: str,
+    query: Query,
+    name: str,
+) -> dict[str, int]:
+    """Count the values of a property in the datasets on STAC."""
+    response = index.session.get(
+        f"https://{index.url}/search",
+        params={
+            "collections": collection.url.rsplit("/", 1)[-1],
+            "limit": _MAX_DATASETS,
+            "fields": f"id,properties.{name}",
+            **_stac_filter(collection, project, query),
+        },
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    values = (
+        item.get("properties", {}).get(name)
+        for item in response.json()["features"]
+    )
+    return Counter(str(v) for v in values if v is not None)
+
+
+def _ask[T](index: Index, what: str, ask: Callable[[], T], default: T) -> T:
+    """Ask an index, unless it could not be reached recently.
+
+    The default is returned if the index cannot be asked or fails to answer.
+    """
+    if time.monotonic() < _RETRY_AT.get(index, 0):
+        record_failure(index)
+        return default
+    try:
+        return ask()
+    except _UNREACHABLE as exc:
+        _RETRY_AT[index] = time.monotonic() + RETRY_AFTER
+        logger.warning(
+            "Not asking %s for %s seconds: %s", index, RETRY_AFTER, exc
+        )
+    except _ERRORS as exc:
+        logger.warning("Failed to get %s from %s: %s", what, index, exc)
+    record_failure(index)
+    return default
 
 
 def _index_values(
@@ -451,18 +526,15 @@ def _index_values(
     field: str,
 ) -> dict[str, int]:
     """Get the number of datasets with each value of a field on an index."""
-    try:
+
+    def ask() -> dict[str, int]:
         if isinstance(index, GlobusESGFIndex):
             return _globus_values(index, query, field)
         if isinstance(index, SolrESGFIndex):
             return _solr_values(index, query, field)
         return _stac_values(index, query, field)
-    except _ERRORS as exc:
-        logger.warning(
-            "Failed to get the values of %s from %s: %s", field, index, exc
-        )
-        record_failure(index)
-        return {}
+
+    return _ask(index, f"the values of {field}", ask, {})
 
 
 def known_facets(project: str) -> set[str]:
@@ -697,16 +769,15 @@ def _index_ranges(
     The time ranges of the experiments of a dataset are joined, like
     ESMValCore joins the data of a list of experiments.
     """
-    try:
+
+    def ask() -> list[tuple[str, str]]:
         if isinstance(index, GlobusESGFIndex):
             return _globus_ranges(index, query, experiment)
         if isinstance(index, SolrESGFIndex):
             return _dataset_ranges(index, query, experiment)
         return _stac_ranges(index, query, experiment)
-    except _ERRORS as exc:
-        logger.warning("Failed to get the dates from %s: %s", index, exc)
-        record_failure(index)
-        return []
+
+    return _ask(index, "the dates", ask, [])
 
 
 def _time_values(

@@ -145,6 +145,30 @@ describe("ESMValTool extension", () => {
     assert.equal(range.start.line, positionOf(document, "  pp:").line);
   });
 
+  it("offers to replace glob patterns by datasets", async () => {
+    const position = positionOf(document, "diagnostics:");
+    const edit = new vscode.WorkspaceEdit();
+    edit.insert(document.uri, position, "datasets: [{dataset: '*'}]\n");
+    assert.ok(await vscode.workspace.applyEdit(edit));
+    try {
+      const lenses = await vscode.commands.executeCommand<vscode.CodeLens[]>(
+        "vscode.executeCodeLensProvider",
+        document.uri,
+      );
+      assert.deepEqual(
+        lenses.map((lens) => [lens.range.start.line, lens.command?.command]),
+        [[position.line, "esmvaltool.populateDatasets"]],
+      );
+    } finally {
+      const undo = new vscode.WorkspaceEdit();
+      undo.delete(
+        document.uri,
+        new vscode.Range(position, position.translate(1, 0)),
+      );
+      await vscode.workspace.applyEdit(undo);
+    }
+  });
+
   it("runs a single language server after overlapping restarts", async () => {
     await Promise.all([
       vscode.commands.executeCommand("esmvaltool.restartLanguageServer"),

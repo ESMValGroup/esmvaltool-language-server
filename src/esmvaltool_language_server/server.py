@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
+import yaml
 from lsprotocol import types
 from pygls.lsp.server import LanguageServer
 
@@ -24,6 +26,11 @@ from esmvaltool_language_server.detection import is_recipe
 from esmvaltool_language_server.diagnostics import check_recipe
 from esmvaltool_language_server.errata import ErrataService, errata_diagnostics
 from esmvaltool_language_server.hover import hover
+from esmvaltool_language_server.populate import (
+    SearchError,
+    dataset_lists,
+    populate_edits,
+)
 from esmvaltool_language_server.schema import MISSING, recipe_schema
 from esmvaltool_language_server.search import FacetSearch, unused_facets
 
@@ -36,6 +43,8 @@ DEBOUNCE_SECONDS = 0.3
 # Wait this long for the values of a facet to be found on ESGF before
 # suggesting other values.
 FACET_SEARCH_SECONDS = 5.0
+
+POPULATE_DATASETS = "esmvaltool.populateDatasets"
 
 
 class RecipeLanguageServer(LanguageServer):
@@ -420,3 +429,133 @@ def definition_(
             location.range,
         )
     return location
+
+
+def _populate_commands(uri: str, text: str) -> list[tuple[int, types.Command]]:
+    """Get the commands that populate the lists of datasets in a recipe."""
+    return [
+        (
+            line,
+            types.Command(
+                title="Replace glob patterns by the datasets with data",
+                command=POPULATE_DATASETS,
+                arguments=[uri, list(path)],
+            ),
+        )
+        for path, line in dataset_lists(text)
+    ]
+
+
+@server.feature(types.TEXT_DOCUMENT_CODE_LENS)
+def code_lens(
+    ls: RecipeLanguageServer,
+    params: types.CodeLensParams,
+) -> list[types.CodeLens]:
+    """Offer to populate the lists of datasets with glob patterns."""
+    uri = params.text_document.uri
+    document = _recipe_document(ls, uri)
+    if document is None:
+        return []
+    return [
+        types.CodeLens(
+            range=types.Range(
+                start=types.Position(line=line, character=0),
+                end=types.Position(line=line, character=0),
+            ),
+            command=command,
+        )
+        for line, command in _populate_commands(uri, document.source)
+    ]
+
+
+@server.feature(
+    types.TEXT_DOCUMENT_CODE_ACTION,
+    types.CodeActionOptions(
+        code_action_kinds=[types.CodeActionKind.RefactorRewrite],
+    ),
+)
+def code_action(
+    ls: RecipeLanguageServer,
+    params: types.CodeActionParams,
+) -> list[types.CodeAction]:
+    """Offer to populate a list of datasets, for editors without lenses."""
+    uri = params.text_document.uri
+    document = _recipe_document(ls, uri)
+    if document is None:
+        return []
+    lines = range(params.range.start.line, params.range.end.line + 1)
+    return [
+        types.CodeAction(
+            title=command.title,
+            kind=types.CodeActionKind.RefactorRewrite,
+            command=command,
+        )
+        for line, command in _populate_commands(uri, document.source)
+        if line in lines
+    ]
+
+
+async def _begin_progress(ls: RecipeLanguageServer, title: str) -> str | None:
+    """Show progress, if the editor supports it."""
+    window = ls.client_capabilities.window
+    if window is None or not window.work_done_progress:
+        return None
+    token = str(uuid.uuid4())
+    await ls.work_done_progress.create_async(token)
+    ls.work_done_progress.begin(
+        token, types.WorkDoneProgressBegin(title=title)
+    )
+    return token
+
+
+@server.command(POPULATE_DATASETS)
+async def populate_datasets(
+    ls: RecipeLanguageServer,
+    uri: str,
+    path: list[str | int],
+) -> None:
+    """Replace the datasets with glob patterns in a list by those with data."""
+    document = ls.workspace.get_text_document(uri)
+    version = document.version
+    token = await _begin_progress(ls, "Searching for datasets")
+    loop = asyncio.get_running_loop()
+    try:
+        edits = await loop.run_in_executor(
+            None,
+            populate_edits,
+            document.source,
+            tuple(path),
+            ls.facet_search.submit,
+        )
+    except (SearchError, yaml.YAMLError) as exc:
+        ls.window_show_message(
+            types.ShowMessageParams(
+                type=types.MessageType.Error,
+                message=f"The datasets were not replaced: {exc}",
+            ),
+        )
+        return
+    finally:
+        if token is not None:
+            ls.work_done_progress.end(token, types.WorkDoneProgressEnd())
+    for edit in edits:
+        edit.range = document.position_codec.range_to_client_units(
+            document.lines,
+            edit.range,
+        )
+    await ls.workspace_apply_edit_async(
+        types.ApplyWorkspaceEditParams(
+            label="Replace glob patterns by the datasets with data",
+            edit=types.WorkspaceEdit(
+                document_changes=[
+                    types.TextDocumentEdit(
+                        text_document=types.OptionalVersionedTextDocumentIdentifier(
+                            uri=uri,
+                            version=version,
+                        ),
+                        edits=list(edits),
+                    ),
+                ],
+            ),
+        ),
+    )
