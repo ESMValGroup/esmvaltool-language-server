@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import yaml
 from lsprotocol import types
 
-from esmvaltool_language_server import references
+from esmvaltool_language_server import references, yaml_loader
 from esmvaltool_language_server.context import context_at
 
 if TYPE_CHECKING:
@@ -67,7 +67,7 @@ def _part_at(word: str, offset: int) -> str:
 
 def _load(text: str) -> object:
     try:
-        return yaml.safe_load(text)
+        return yaml_loader.load(text)
     except yaml.YAMLError:
         return None
 
@@ -98,7 +98,7 @@ def _key_location(
 ) -> types.Location | None:
     """Find the first of the keys at the target paths."""
     try:
-        root = yaml.compose(text, Loader=yaml.SafeLoader)
+        root = yaml_loader.compose(text)
     except yaml.YAMLError:
         return None
     for target in targets:

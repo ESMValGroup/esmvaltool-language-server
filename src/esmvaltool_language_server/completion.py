@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING
 import yaml
 from lsprotocol import types
 
-from esmvaltool_language_server import cmor, references, timerange
+from esmvaltool_language_server import (
+    cmor,
+    references,
+    timerange,
+    vocabulary,
+)
 from esmvaltool_language_server.context import Context, context_at
 from esmvaltool_language_server.schema import (
     MISSING,
@@ -230,6 +235,37 @@ def _key_snippet(
     return f"{key}: {_placeholder(1, default)}"
 
 
+def _table_values(
+    path: Path,
+    recipe: object,
+) -> list[tuple[str, types.CompletionItemKind, str | None]]:
+    """Get the values of a facet from the CMOR tables, if it has them.
+
+    The schema allows the branding suffixes of all variables, may list the
+    tables of all projects, and does not list frequencies.
+    """
+    if suffixes := cmor.branding_suffixes(path, recipe):
+        found = suffixes
+    elif tables := cmor.mips(path, recipe):
+        found = tables
+    else:
+        found = {
+            value: "\n\n".join(
+                text
+                for text in (
+                    vocabulary.facet_documentation(path, value, recipe),
+                    note,
+                )
+                if text
+            )
+            for value, note in cmor.table_values(path, recipe).items()
+        }
+    return [
+        (to_yaml(value), types.CompletionItemKind.EnumMember, text or None)
+        for value, text in found.items()
+    ]
+
+
 def _value_items(
     context: Context,
     recipe: object,
@@ -251,12 +287,8 @@ def _value_items(
         )
         for value in choices
     ]
-    if suffixes := cmor.branding_suffixes(path, recipe):
-        # The schema allows the suffixes of all variables in the table.
-        candidates = [
-            (to_yaml(suffix), types.CompletionItemKind.EnumMember, text)
-            for suffix, text in suffixes.items()
-        ]
+    if table_values := _table_values(path, recipe):
+        candidates = table_values
     if facet_values is not None and (
         available := _available_values(path, recipe, facet_values)
     ):
