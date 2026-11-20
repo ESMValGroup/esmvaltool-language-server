@@ -195,11 +195,7 @@ def stac_session(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Session]:
             ),
         },
     )
-    monkeypatch.setattr(
-        esgf.intake_esgf.conf,
-        "get_cached_session",
-        lambda: session,
-    )
+    monkeypatch.setattr(esgf, "_session", lambda: session)
     esgf._stac_collection.cache_clear()
     yield session
     esgf._stac_collection.cache_clear()
@@ -311,6 +307,92 @@ def test_globus_index_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
         esgf._indices.cache_clear()
     assert isinstance(index, GlobusESGFIndex)
     assert index.client.transport.http_timeout == esgf.TIMEOUT
+
+
+def test_indices_without_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(
+        esgf.intake_esgf.conf,
+        "globus_indices",
+        {"ESGF2-US-1.5-Catalog": True},
+    )
+    monkeypatch.setitem(esgf.intake_esgf.conf, "solr_indices", {"a.org": True})
+    monkeypatch.setitem(esgf.intake_esgf.conf, "stac_indices", {"c.org": True})
+    esgf._indices.cache_clear()
+    try:
+        indices = esgf._indices()
+    finally:
+        esgf._indices.cache_clear()
+    assert len(indices) == 3
+    for index in indices:
+        assert type(index.session) is requests.Session
+
+
+class _Unreachable:
+    """Fail to connect, and count the attempts."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.attempts = 0
+
+    def get(self, *_: object, **__: object) -> _Response:
+        self.attempts += 1
+        raise self.error
+
+
+@pytest.fixture
+def retry_at(monkeypatch: pytest.MonkeyPatch) -> dict[esgf.Index, float]:
+    retry_at: dict[esgf.Index, float] = {}
+    monkeypatch.setattr(esgf, "_RETRY_AT", retry_at)
+    return retry_at
+
+
+@pytest.mark.parametrize(
+    "error",
+    [requests.ConnectionError("refused"), requests.ReadTimeout("slow")],
+)
+def test_unreachable_index_is_skipped(
+    retry_at: dict[esgf.Index, float],
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
+) -> None:
+    session = _Unreachable(error)
+    index = _index(
+        SolrESGFIndex,
+        session=session,
+        url="https://node",
+        distrib=False,
+        repr="SolrESGFIndex('node')",
+    )
+    failures = esgf.failures()
+    with caplog.at_level(logging.WARNING):
+        assert esgf._index_values(index, {}, "model") == {}
+    assert "Not asking SolrESGFIndex('node') for 60 seconds" in caplog.text
+    assert esgf._index_ranges(index, {}, "experiment") == []
+    assert session.attempts == 1
+    assert esgf.failures() == failures + 2
+    # The index is asked again once the time has passed.
+    retry_at[index] = esgf.time.monotonic()
+    assert esgf._index_values(index, {}, "model") == {}
+    assert session.attempts == 2
+    assert retry_at[index] > esgf.time.monotonic()
+
+
+def test_index_with_error_is_not_skipped(
+    retry_at: dict[esgf.Index, float],
+) -> None:
+    url = "https://node"
+    session = _Session({f"{url}/esg-search/search": _Response("error", 500)})
+    index = _index(
+        SolrESGFIndex,
+        session=session,
+        url=url,
+        distrib=False,
+        repr="SolrESGFIndex('node')",
+    )
+    assert esgf._index_values(index, {}, "model") == {}
+    assert esgf._index_values(index, {}, "model") == {}
+    assert len(session.params) == 2
+    assert not retry_at
 
 
 def test_index_values_error(caplog: pytest.LogCaptureFixture) -> None:

@@ -45,6 +45,7 @@ authors and references it defines.
   that the recipe schema allows are suggested.
   The values are remembered for 2 hours, or for 10 minutes if an index or
   other data source could not be searched.
+  An index that cannot be reached is not asked again for a minute.
   To get fresh suggestions, for example for local files that you just added
   or after changing the indices in the intake-esgf configuration, restart the
   language server: in Visual Studio Code, press
