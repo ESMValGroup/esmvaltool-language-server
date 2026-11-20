@@ -50,6 +50,7 @@ Issues = "https://github.com/ESMValGroup/esmvaltool-language-server/issues"
 readme = {file = "README.md", content-type = "text/markdown"}
 
 [tool.setuptools_scm]
+version_scheme = "release-branch-semver"  # calver-by-date in setuptools 10
 fallback_version = "0.1.0.dev0"
 
 [tool.pytest.ini_options]
