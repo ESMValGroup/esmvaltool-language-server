@@ -3,55 +3,9 @@
 from __future__ import annotations
 
 import difflib
-import re
 
-import yaml
 from esmvalcore.recipe import format_recipe
 from lsprotocol import types
-
-# The start of a comment: a ``#`` at the start of a line or after whitespace.
-_COMMENT = re.compile(r"(?:^|(?<=\s))#", re.MULTILINE)
-
-
-def _count_comments(text: str) -> int:
-    """Count the comments in a YAML text."""
-    # A ``#`` in a scalar, e.g. in a quoted string or a block scalar, does
-    # not start a comment.
-    scalars = [
-        (token.start_mark.index, token.end_mark.index)
-        for token in yaml.scan(text, Loader=yaml.SafeLoader)
-        if isinstance(token, yaml.ScalarToken)
-    ]
-    return sum(
-        not any(start <= match.start() < end for start, end in scalars)
-        for match in _COMMENT.finditer(text)
-    )
-
-
-def has_comments(text: str) -> bool:
-    """Check if a recipe contains comments that formatting would remove.
-
-    Parameters
-    ----------
-    text:
-        The YAML text of the recipe.
-
-    Returns
-    -------
-    :
-        Whether the recipe contains a comment.
-
-    Raises
-    ------
-    yaml.YAMLError
-        If the text is not valid YAML.
-    """
-    comments = _count_comments(text)
-    try:
-        formatted = format_recipe(text)
-    except yaml.YAMLError:
-        return comments > 0
-    return _count_comments(formatted) < comments
 
 
 def _position(lines: list[str], line: int) -> types.Position:

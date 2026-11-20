@@ -97,9 +97,7 @@ authors and references it defines.
 - Formatting of recipes with `esmvalcore.recipe.format_recipe`, which puts
   the sections of the recipe and the facets of the datasets and variables in
   a standard order.
-  Formatting removes comments, so recipes with comments are not formatted.
-  This does not apply to the comments before the document start `---`, such as
-  the name of the recipe, which are kept.
+  Comments move together with the item that they belong to.
   In Visual Studio Code, click the **ESMValTool: Format Recipe** button at the
   top of the editor, or run that command.
   **Format Document** also works, but can use another extension that formats

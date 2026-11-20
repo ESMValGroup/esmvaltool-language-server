@@ -1,13 +1,9 @@
 from __future__ import annotations
 
 import pytest
-import yaml
 from lsprotocol import types
 
-from esmvaltool_language_server.formatting import (
-    formatting_edits,
-    has_comments,
-)
+from esmvaltool_language_server.formatting import formatting_edits
 
 
 def _apply(text: str, edits: list[types.TextEdit]) -> str:
@@ -23,43 +19,6 @@ def _apply(text: str, edits: list[types.TextEdit]) -> str:
         start, end = offset(edit.range.start), offset(edit.range.end)
         text = text[:start] + edit.new_text + text[end:]
     return text
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "# Comment\na: 1\n",
-        "a: 1  # Comment\n",
-        "a:\n  # Comment\n  b: 1\n",
-        "# Header\n---\n# Comment\na: 1\n",
-        "# Header\n---\na: 1  # Comment\n",
-        "# Comment\na: 1\n---\n",
-    ],
-)
-def test_has_comments(text: str) -> None:
-    assert has_comments(text)
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        "a: 1\n",
-        "a: b#c\n",
-        "a: 'b # c'\n",
-        'a: "b # c"\n',
-        "a: |\n  b\n  # c\n",
-        "---\na: 1\n",
-        "# ESMValTool\n# recipe_a.yml\n---\na: 1\n",
-        "# Header\n\n  # Header\r\n---  \r\na: 1\n",
-    ],
-)
-def test_has_no_comments(text: str) -> None:
-    assert not has_comments(text)
-
-
-def test_has_comments_invalid_yaml() -> None:
-    with pytest.raises(yaml.YAMLError):
-        has_comments("a: 'b\n")
 
 
 FORMATTED = (
@@ -86,6 +45,11 @@ HEADER = "# ESMValTool\n\n# recipe_a.yml\n---\n"
         # The part up to the document start is kept.
         (f"---\n{FORMATTED}", f"---\n{FORMATTED}"),
         (HEADER + UNFORMATTED, HEADER + FORMATTED),
+        # Comments are kept.
+        (
+            "# Comment\n" + UNFORMATTED.replace("\n", "  # Datasets\n", 1),
+            "# Comment\n" + FORMATTED.replace("6}\n", "6}  # Datasets\n"),
+        ),
     ],
 )
 def test_formatting_edits(text: str, expected: str) -> None:
@@ -98,7 +62,6 @@ def test_formatting_edits_folded_description() -> None:
         "    First paragraph.\n\n    Second paragraph.\n\n"
         "    - item one\n    - item two\n"
     )
-    assert not has_comments(text)
     assert _apply(text, formatting_edits(text)) == (
         "# recipe.yml\n---\ndocumentation:\n  description: |-\n"
         "    First paragraph.\n\n    Second paragraph.\n\n"

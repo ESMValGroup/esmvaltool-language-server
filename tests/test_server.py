@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import sys
 import threading
 from concurrent.futures import Future
@@ -584,14 +585,10 @@ async def test_other_files_have_no_features() -> None:
 async def test_formatting(tmp_path: Path) -> None:
     published: asyncio.Queue[types.PublishDiagnosticsParams] = asyncio.Queue()
     async with _client(published) as client:
-        messages: list[types.ShowMessageParams] = []
-
-        @client.feature(types.WINDOW_SHOW_MESSAGE)
-        def show(params: types.ShowMessageParams) -> None:
-            messages.append(params)
+        count = itertools.count()
 
         async def format_(text: str) -> list[types.TextEdit] | None:
-            uri = (tmp_path / f"recipe_{len(messages)}.yml").as_uri()
+            uri = (tmp_path / f"recipe_{next(count)}.yml").as_uri()
             _open(client, uri, text)
             return await client.text_document_formatting_async(
                 types.DocumentFormattingParams(
@@ -616,9 +613,8 @@ async def test_formatting(tmp_path: Path) -> None:
             ),
         ]
         assert await format_("documentation: [\n") is None
-        assert not messages
-        assert await format_("documentation: {}  # Comment\n") is None
-        assert len(messages) == 1
-        assert "comments" in messages[0].message
+        # Comments are kept, so this recipe is already formatted.
+        edits = await format_("documentation:\n  title: x  # Comment\n")
+        assert edits is not None
+        assert not edits
         assert await format_("package: {name: example}\n") is None
-        assert len(messages) == 1
