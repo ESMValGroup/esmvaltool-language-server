@@ -8,7 +8,7 @@ import pytest
 import requests
 from esmvalcore.config import CFG
 
-from esmvaltool_language_server import esgf, vocabulary
+from esmvaltool_language_server import cmor, esgf, vocabulary
 from esmvaltool_language_server.vocabulary import (
     controlled_vocabulary,
     describe,
@@ -210,7 +210,7 @@ def test_controlled_vocabulary_invalid_files(
         {"cmor_table": {"type": "esmvalcore.cmor.table.CMIP6Info"}},
     )
     monkeypatch.setattr(
-        vocabulary,
+        cmor,
         "get_tables",
         lambda *_: type("Info", (), {"paths": paths})(),
     )

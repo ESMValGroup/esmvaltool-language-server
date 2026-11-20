@@ -17,4 +17,9 @@ diagnostics:
         preprocessor: pp
         project: CMIP6
         mip: Amonn
+        exp: historical
+        ensemble: r1i1p1f1
+        grid: gn
+        additional_datasets:
+          - dataset: ACCESS-ESM1-5
     scripts: null

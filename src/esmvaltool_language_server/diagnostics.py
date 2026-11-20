@@ -6,6 +6,7 @@ import yaml
 from esmvalcore.recipe import RecipeIssue, validate_recipe
 from lsprotocol import types
 
+from esmvaltool_language_server import yaml_loader
 from esmvaltool_language_server.schema import MISSING
 
 SOURCE = "esmvaltool"
@@ -50,14 +51,13 @@ def check_recipe(text: str) -> tuple[object, list[types.Diagnostic]]:
     """
     lines = text.splitlines()
     try:
-        recipe = yaml.safe_load(text)
+        recipe = yaml_loader.load(text)
     except yaml.MarkedYAMLError as exc:
         return MISSING, [_syntax_diagnostic(exc, lines)]
     except yaml.YAMLError as exc:
         return MISSING, [_diagnostic(str(exc), 0, 0, lines)]
     return recipe, [
-        _issue_diagnostic(issue, lines)
-        for issue in validate_recipe(recipe, text)
+        _issue_diagnostic(issue, lines) for issue in validate_recipe(text)
     ]
 
 

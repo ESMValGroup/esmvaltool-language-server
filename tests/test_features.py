@@ -137,7 +137,11 @@ def test_complete_default_value(split_cursor: SplitCursor) -> None:
 def test_complete_mip(split_cursor: SplitCursor) -> None:
     labels = _complete(split_cursor, "mip: Amon", "mip: A|")
     assert "Amon" in labels
-    assert "Omon" in labels
+    assert "day" in labels
+    # Only the tables that contain the variable.
+    assert "Omon" not in labels
+    # The schema may also list the tables, but each is suggested once.
+    assert len(labels) == len(set(labels))
 
 
 def test_complete_branding_suffix(split_cursor: SplitCursor) -> None:
@@ -150,6 +154,23 @@ def test_complete_branding_suffix(split_cursor: SplitCursor) -> None:
     assert "tavg-h2m-hxy-u" in labels
     # Branding suffixes of other variables in the table.
     assert "tavg-u-hxy-u" not in labels
+
+
+def test_complete_frequency(split_cursor: SplitCursor) -> None:
+    old = "project: CMIP6\n        mip: Amon"
+    new = "project: CMIP7\n        mip: atmos\n        frequency: |"
+    text, position = split_cursor(RECIPE.replace(old, new))
+    recipe = yaml.safe_load(RECIPE.replace(old, new.replace("|", "")))
+    items = {
+        item.label: item
+        for item in completions(text, position, recipe, recipe_schema())
+    }
+    assert "mon" in items
+    # The variable has a time dimension.
+    assert "fx" not in items
+    documentation = items["mon"].documentation
+    assert isinstance(documentation, types.MarkupContent)
+    assert documentation.value.startswith("`mon`: Monthly samples.")
 
 
 @pytest.mark.parametrize("new", ["mip: |", "mip: [Amon, |]"])
@@ -188,8 +209,8 @@ def test_complete_facet_values_not_found(split_cursor: SplitCursor) -> None:
         recipe_schema(),
         Options(facet_values=lambda *_: None),
     )
-    # The values that the schema allows are suggested instead.
-    assert "Omon" in [item.label for item in items]
+    # The tables of the project are suggested instead.
+    assert "day" in [item.label for item in items]
 
 
 @pytest.mark.parametrize(
