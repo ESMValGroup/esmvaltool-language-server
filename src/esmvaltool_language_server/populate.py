@@ -218,9 +218,14 @@ def _with_ranges(datasets: list[dict[object, object]]) -> list[dict]:
 
 
 def _texts(datasets: list[dict]) -> list[str]:
-    """Write datasets as in :func:`esmvalcore.recipe.format_recipe`."""
-    text = format_recipe(yaml.safe_dump({"datasets": datasets}))
-    return [line.removeprefix("  - ") for line in text.splitlines()[1:]]
+    """Write datasets as in :func:`esmvalcore.recipe.format_recipe`.
+
+    Long datasets are wrapped: their next lines are indented relative to the
+    ``-`` of the item.
+    """
+    text = format_recipe({"datasets": datasets}).rstrip("\n")
+    items = text.removeprefix("datasets:\n  - ").split("\n  - ")
+    return [item.replace("\n  ", "\n") for item in items]
 
 
 def _end(node: yaml.Node) -> yaml.Mark:
@@ -241,12 +246,10 @@ def _edit(
     flow: bool,
 ) -> types.TextEdit:
     """Replace an item of a sequence by other items."""
-    if flow:
-        new_text = ", ".join(items)
-    else:
-        dash = text.rindex("-", 0, node.start_mark.index)
-        column = dash - text.rfind("\n", 0, dash) - 1
-        new_text = f"\n{' ' * column}- ".join(items)
+    dash = text.rindex("-", 0, node.start_mark.index)
+    indent = " " * (dash - text.rfind("\n", 0, dash) - 1)
+    items = [item.replace("\n", f"\n{indent}") for item in items]
+    new_text = ", ".join(items) if flow else f"\n{indent}- ".join(items)
     end = _end(node)
     return types.TextEdit(
         range=types.Range(

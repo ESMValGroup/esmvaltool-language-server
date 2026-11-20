@@ -5,6 +5,7 @@ from textwrap import dedent
 from typing import TYPE_CHECKING
 
 import pytest
+import yaml
 from lsprotocol import types
 
 from esmvaltool_language_server.populate import (
@@ -228,4 +229,37 @@ def test_time_range_patterns_are_kept() -> None:
 
     assert [edit.new_text for edit in edits] == [
         "{dataset: MIROC6, project: CMIP6, timerange: '*'}",
+    ]
+
+
+def test_long_datasets_are_wrapped() -> None:
+    # format_recipe wraps long lines; the edit must still be valid YAML.
+    facets = ", ".join(f"facet_{i}: value_{i}" for i in range(12))
+    text = dedent(f"""\
+        diagnostics:
+          diag:
+            variables:
+              tas:
+                mip: Amon
+                additional_datasets:
+                  - {{dataset: 'M*', project: CMIP6, {facets}}}
+        """)
+    path = ("diagnostics", "diag", "variables", "tas", "additional_datasets")
+
+    (edit,) = populate_edits(text, path, _search)
+
+    assert "\n" in edit.new_text
+    lines = text.splitlines()
+    line = lines[edit.range.start.line]
+    lines[edit.range.start.line] = (
+        line[: edit.range.start.character] + edit.new_text
+    )
+    recipe = yaml.safe_load("\n".join(lines))
+    datasets = recipe["diagnostics"]["diag"]["variables"]["tas"]
+    assert datasets["additional_datasets"] == [
+        {
+            "dataset": "MIROC6",
+            "project": "CMIP6",
+            **{f"facet_{i}": f"value_{i}" for i in range(12)},
+        },
     ]
