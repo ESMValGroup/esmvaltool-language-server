@@ -84,7 +84,7 @@ def test_branding_suffixes_documentation() -> None:
     [
         # No project.
         (("diagnostics", "diag", "additional_datasets", 0), RECIPE),
-        # A project without branded variables.
+        # A project without the table.
         (
             (
                 "diagnostics",
@@ -95,6 +95,19 @@ def test_branding_suffixes_documentation() -> None:
                 0,
             ),
             RECIPE,
+        ),
+        # A variable without a branding suffix.
+        (
+            ("diagnostics", "diag", "variables", "tas"),
+            {
+                "diagnostics": {
+                    "diag": {
+                        "variables": {
+                            "tas": {"project": "CMIP6", "mip": "Amon"},
+                        },
+                    },
+                },
+            },
         ),
         (("diagnostics", "diag", "variables", "tas"), MISSING),
         (("diagnostics", "diag", "variables", "tas", "mip"), RECIPE),
@@ -314,6 +327,8 @@ def _values(facet: str, **facets: object) -> dict[str, str]:
 @pytest.mark.parametrize(
     ("facet", "facets", "expected"),
     [
+        # No project.
+        ("frequency", {}, set()),
         ("frequency", {"project": "CMIP6"}, {"mon"}),
         (
             "frequency",
