@@ -465,10 +465,38 @@ def _stac_values(
     ):
         return {}
     response.raise_for_status()
-    return {
+    counts = {
         bucket["key"]: bucket["frequency"]
         for bucket in response.json()["aggregations"][0]["buckets"]
     }
+    # Some indices cannot aggregate some properties, e.g. the version.
+    return counts or _stac_item_values(index, collection, project, query, name)
+
+
+def _stac_item_values(
+    index: STACESGFIndex,
+    collection: _Collection,
+    project: str,
+    query: Query,
+    name: str,
+) -> dict[str, int]:
+    """Count the values of a property in the datasets on STAC."""
+    response = index.session.get(
+        f"https://{index.url}/search",
+        params={
+            "collections": collection.url.rsplit("/", 1)[-1],
+            "limit": _MAX_DATASETS,
+            "fields": f"id,properties.{name}",
+            **_stac_filter(collection, project, query),
+        },
+        timeout=TIMEOUT,
+    )
+    response.raise_for_status()
+    values = (
+        item.get("properties", {}).get(name)
+        for item in response.json()["features"]
+    )
+    return Counter(str(v) for v in values if v is not None)
 
 
 def _ask[T](index: Index, what: str, ask: Callable[[], T], default: T) -> T:

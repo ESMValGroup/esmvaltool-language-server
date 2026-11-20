@@ -894,3 +894,23 @@ def test_successful_requests_are_not_recorded(
     before = esgf.failures()
     assert esgf.facet_values("CMIP6", {"exp": "ssp585"}, "timerange") == []
     assert esgf.failures() == before
+
+
+def test_stac_values_from_items(stac_session: _Session) -> None:
+    # Some indices return no buckets for properties they cannot aggregate.
+    stac_session.responses["https://stac/collections/CMIP6/aggregate"] = (
+        _Response({"aggregations": [{"buckets": []}]})
+    )
+    stac_session.responses["https://stac/search"] = _Response(
+        {
+            "features": [
+                {"properties": {"cmip6:source_id": "A"}},
+                {"properties": {"cmip6:source_id": "A"}},
+                {"properties": {}},
+            ],
+        },
+    )
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    query = {"project": ["CMIP6"]}
+    assert esgf._stac_values(index, query, "source_id") == {"A": 2}
+    assert stac_session.params[-1]["fields"] == "id,properties.cmip6:source_id"
