@@ -222,6 +222,15 @@ describe("ESMValTool extension", () => {
         lenses.map((lens) => [lens.range.start.line, lens.command?.command]),
         [[position.line, "esmvaltool.populateDatasets"]],
       );
+      const actions = await vscode.commands.executeCommand<vscode.CodeAction[]>(
+        "vscode.executeCodeActionProvider",
+        document.uri,
+        new vscode.Range(position, position),
+      );
+      assert.deepEqual(
+        actions.map((action) => [action.kind?.value, action.command?.command]),
+        [["refactor.rewrite", "esmvaltool.populateDatasets"]],
+      );
     } finally {
       const undo = new vscode.WorkspaceEdit();
       undo.delete(

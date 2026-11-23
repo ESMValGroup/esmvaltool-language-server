@@ -275,6 +275,14 @@ def test_populate_fails(text: str, message: str) -> None:
         _edits(text)
 
 
+def test_populate_changed_recipe() -> None:
+    # The recipe changed after the editor got the path of the list.
+    text = "diagnostics: [diag]\n"
+    path = ("diagnostics", "diag", "additional_datasets")
+    with pytest.raises(SearchError, match="No variable groups"):
+        _edits(text, path)
+
+
 def test_time_range_patterns_are_kept() -> None:
     # ESMValCore replaces the wildcards in timerange when it finds the data.
     text = dedent("""\

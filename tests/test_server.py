@@ -456,6 +456,22 @@ async def test_populate_datasets_reports_progress(
 
 
 @pytest.mark.asyncio
+async def test_no_progress_after_end(monkeypatch: pytest.MonkeyPatch) -> None:
+    ls, reported = _progress_server(monkeypatch, POPULATE_RECIPE)
+    token = await server._begin_progress(ls, "Searching for datasets")
+    progress = server._progress(ls, token)
+    # The search ends the progress, but a report from its thread may still be
+    # waiting in the event loop.
+    progress.report("Searching", 50)
+    ls.work_done_progress.end(token, types.WorkDoneProgressEnd())
+    ls.work_done_progress.tokens.pop(token)
+    await asyncio.sleep(0)
+    assert not any(
+        isinstance(value, types.WorkDoneProgressReport) for value in reported
+    )
+
+
+@pytest.mark.asyncio
 async def test_populate_datasets_cancelled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
