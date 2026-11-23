@@ -9,6 +9,7 @@ The data and nodes are shared, so they must not be modified.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import functools
 
@@ -41,8 +42,9 @@ def _parse(text: str) -> _Parsed | yaml.YAMLError:
 def _parsed(text: str) -> _Parsed:
     result = _parse(text)
     if isinstance(result, yaml.YAMLError):
-        # The error is remembered, so do not add to its traceback.
-        raise result.with_traceback(None)
+        # The error is remembered and shared between threads, so raise a
+        # copy that each caller can add its traceback to.
+        raise copy.copy(result).with_traceback(None)
     return result
 
 

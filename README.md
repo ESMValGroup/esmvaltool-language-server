@@ -115,7 +115,11 @@ authors and references it defines.
   patterns, `{...}` or one facet per line.
   This can take a minute if there are many datasets; the progress shows what
   is being searched, and the search can be cancelled.
-  A warning is shown if some sources of data could not be searched, so
+  Starting the search again while it runs does nothing, unless the recipe
+  changed: then the running search stops and a new one starts, which uses
+  what the running search has found.
+  Datasets without data are kept, and a warning lists them.
+  A warning is also shown if some sources of data could not be searched, so
   datasets may be missing.
 
 Other tools also use files named like recipes, for example `recipe.yaml` of

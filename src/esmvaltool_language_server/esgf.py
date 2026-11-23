@@ -322,6 +322,15 @@ class _Collection:
     queryables: frozenset[str]
     aggregations: frozenset[str] | None
     """The aggregations, None if the index cannot list them."""
+    counts: dict[str, bool] = dataclasses.field(
+        default_factory=dict,
+        compare=False,
+        hash=False,
+    )
+    """Whether the index has counted the values of each aggregation.
+
+    Indices return no values for properties that they cannot count.
+    """
 
 
 @functools.cache
@@ -445,6 +454,29 @@ def _stac_values(
         and aggregation not in collection.aggregations
     ):
         return {}
+    if collection.counts.get(aggregation) is not False:
+        counts = _stac_counts(index, collection, project, query, aggregation)
+        if counts is None:
+            return {}
+        if counts:
+            collection.counts[aggregation] = True
+        if counts or collection.counts.get(aggregation):
+            return counts
+    # Some indices cannot aggregate some properties, e.g. the version.
+    values = _stac_item_values(index, collection, project, query, name)
+    if values:
+        collection.counts[aggregation] = False
+    return values
+
+
+def _stac_counts(
+    index: STACESGFIndex,
+    collection: _Collection,
+    project: str,
+    query: Query,
+    aggregation: str,
+) -> dict[str, int] | None:
+    """Count the values of a property, None if the index cannot."""
     # Some indices ignore the filter of this request if it is sent with GET.
     response = index.session.post(
         f"{collection.url}/aggregate",
@@ -463,14 +495,12 @@ def _stac_values(
         <= response.status_code
         < requests.codes.server_error
     ):
-        return {}
+        return None
     response.raise_for_status()
-    counts = {
+    return {
         bucket["key"]: bucket["frequency"]
         for bucket in response.json()["aggregations"][0]["buckets"]
     }
-    # Some indices cannot aggregate some properties, e.g. the version.
-    return counts or _stac_item_values(index, collection, project, query, name)
 
 
 def _stac_item_values(

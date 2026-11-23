@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import pytest
@@ -10,7 +10,7 @@ import pytest
 from esmvaltool_language_server import esgf, search
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterator, Mapping
 
 TIMEOUT = 10
 
@@ -201,13 +201,14 @@ def test_facet_search_cancel(
 
     monkeypatch.setattr(source, "facet_values", facet_values)
     facet_search = search.FacetSearch()
-    facet_search._executor = ThreadPoolExecutor(max_workers=1)
-    running = facet_search.submit("CMIP6", {"exp": "a"}, "dataset")
+    facet_search._background_executor = ThreadPoolExecutor(max_workers=1)
+    background = facet_search.background()
+    running = background.submit("CMIP6", {"exp": "a"}, "dataset")
     assert started.wait(TIMEOUT)
-    queued = facet_search.submit("CMIP6", {"exp": "b"}, "dataset")
+    queued = background.submit("CMIP6", {"exp": "b"}, "dataset")
     assert running is not None
     assert queued is not None
-    facet_search.cancel([running, queued])
+    background.cancel([running, queued])
     release.set()
     # Searches that have started are finished, so they can be used later.
     assert running.result() == ["A"]
@@ -237,8 +238,9 @@ def test_facet_search_for_completion_does_not_wait(
     monkeypatch.setattr(source, "facet_values", facet_values)
     facet_search = search.FacetSearch()
     facet_search._background_executor = ThreadPoolExecutor(max_workers=1)
-    busy = facet_search.background.submit("CMIP6", {"exp": "a"}, "dataset")
-    queued = facet_search.background.submit("CMIP6", {"exp": "b"}, "dataset")
+    background = facet_search.background()
+    busy = background.submit("CMIP6", {"exp": "a"}, "dataset")
+    queued = background.submit("CMIP6", {"exp": "b"}, "dataset")
     # Completion needs the queued search, so it is run for completion.
     found = facet_search.submit("CMIP6", {"exp": "b"}, "dataset")
     assert found is queued
@@ -248,9 +250,76 @@ def test_facet_search_for_completion_does_not_wait(
     assert not busy.done()
     release.set()
     assert busy.result(TIMEOUT) == ["A"]
-    assert facet_search.background.is_complete(busy)
-    facet_search.background.cancel([busy])
+    assert background.is_complete(busy)
+    background.cancel([busy])
     assert facet_search.submit("CMIP6", {"exp": "a"}, "dataset") is busy
+
+
+@pytest.fixture
+def blocked(
+    monkeypatch: pytest.MonkeyPatch,
+    source: _Source,
+) -> Iterator[tuple[search.FacetSearch, Future[list[str]]]]:
+    """Get a facet search whose background searches wait for a busy one."""
+    release = threading.Event()
+
+    def facet_values(
+        project: str,
+        facets: Mapping[object, object],
+        facet: str,
+    ) -> list[str]:
+        if facets.get("exp") == "busy":
+            release.wait(TIMEOUT)
+        return ["A"]
+
+    monkeypatch.setattr(source, "facet_values", facet_values)
+    facet_search = search.FacetSearch()
+    facet_search._background_executor = ThreadPoolExecutor(max_workers=1)
+    busy = facet_search.background().submit(
+        "CMIP6", {"exp": "busy"}, "dataset"
+    )
+    assert busy is not None
+    yield facet_search, busy
+    release.set()
+
+
+def test_background_searches_share_searches(
+    blocked: tuple[search.FacetSearch, Future[list[str]]],
+) -> None:
+    facet_search, busy = blocked
+    first = facet_search.background()
+    second = facet_search.background()
+    queued = first.submit("CMIP6", {"exp": "a"}, "dataset")
+    assert queued is not None
+    assert second.submit("CMIP6", {"exp": "a"}, "dataset") is queued
+    # The other background search still waits for the search.
+    first.cancel([queued])
+    assert not queued.cancelled()
+    second.cancel([queued])
+    assert queued.cancelled()
+    assert not busy.cancelled()
+
+
+def test_background_search_does_not_cancel_completion(
+    blocked: tuple[search.FacetSearch, Future[list[str]]],
+) -> None:
+    facet_search, _ = blocked
+    background = facet_search.background()
+    queued = background.submit("CMIP6", {"exp": "a"}, "dataset")
+    assert queued is not None
+    assert facet_search.submit("CMIP6", {"exp": "a"}, "dataset") is queued
+    background.cancel([queued])
+    assert queued.result(TIMEOUT) == ["A"]
+
+
+def test_facet_search_is_incomplete_after_expiry(source: _Source) -> None:
+    source.values = []
+    facet_search = search.FacetSearch(retry_age=0)
+    future = facet_search.submit("CMIP6", {}, "dataset")
+    assert future is not None
+    future.result(TIMEOUT)
+    assert facet_search.submit("CMIP6", {}, "dataset") is not future
+    assert not facet_search.is_complete(future)
 
 
 def test_facet_search_fails(monkeypatch: pytest.MonkeyPatch) -> None:

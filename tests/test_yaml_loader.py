@@ -32,3 +32,16 @@ def test_parse_invalid() -> None:
         assert len(list(info.traceback)) < 5
     with pytest.raises(yaml.YAMLError):
         yaml_loader.compose("a: [\n")
+
+
+def test_parse_invalid_raises_copies() -> None:
+    errors = []
+    for _ in range(2):
+        try:
+            yaml_loader.load("a: [\n")
+        except yaml.YAMLError as exc:
+            errors.append(exc)
+    first, second = errors
+    # Threads that raise the remembered error do not share it.
+    assert first is not second
+    assert str(first) == str(second)

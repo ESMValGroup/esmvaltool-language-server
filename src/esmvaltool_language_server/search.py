@@ -7,6 +7,7 @@ import functools
 import logging
 import threading
 import time
+import weakref
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Protocol
 
@@ -107,6 +108,8 @@ class _Search:
     """Whether the search has been submitted to the pool for completion."""
     claimed: bool = False
     """Whether a worker has started the search."""
+    owners: set[BackgroundSearch] = dataclasses.field(default_factory=set)
+    """The background searches that wait for the search."""
 
 
 class FacetSearch:
@@ -132,7 +135,10 @@ class FacetSearch:
     ) -> None:
         self.max_age = max_age
         self.retry_age = retry_age
-        self._incomplete: set[Hashable] = set()
+        # The searches for which a source could not be searched.
+        self._incomplete: weakref.WeakSet[Future[list[str]]] = (
+            weakref.WeakSet()
+        )
         self._executor = ThreadPoolExecutor(
             max_workers=4,
             thread_name_prefix="facet-search",
@@ -143,8 +149,18 @@ class FacetSearch:
         )
         self._searches: dict[Hashable, _Search] = {}
         self._lock = threading.Lock()
-        self.background = BackgroundSearch(self)
-        """Start searches that may wait for the searches for completion."""
+
+    def background(self) -> BackgroundSearch:
+        """Start searches that may wait for the searches for completion.
+
+        Returns
+        -------
+        :
+            The searches of one user of the facet search, e.g. a search for
+            datasets, which can cancel them without cancelling the searches
+            of the other users.
+        """
+        return BackgroundSearch(self)
 
     def submit(
         self,
@@ -152,7 +168,7 @@ class FacetSearch:
         facets: Mapping[object, object],
         facet: str,
         *,
-        background: bool = False,
+        background: BackgroundSearch | None = None,
     ) -> Future[list[str]] | None:
         """Start finding the values of a facet, unless it has been started.
 
@@ -165,7 +181,8 @@ class FacetSearch:
         facet:
             The facet to get the values of.
         background:
-            Whether the search may wait for the searches for completion.
+            The background search that starts the search, which may wait for
+            the searches for completion. None for completion.
 
         Returns
         -------
@@ -191,19 +208,23 @@ class FacetSearch:
                     start=time.monotonic(),
                     future=Future(),
                     run=functools.partial(
-                        self._find, key, sources, project, relevant, facet
+                        _search, sources, project, relevant, facet
                     ),
-                    interactive=not background,
+                    interactive=background is None,
                 )
                 self._searches[key] = search
                 executor = (
-                    self._background_executor if background else self._executor
+                    self._executor
+                    if background is None
+                    else self._background_executor
                 )
                 self._start(executor, search)
-            elif not background and not search.interactive:
+            elif background is None and not search.interactive:
                 # Do not wait for the background searches that are before it.
                 search.interactive = True
                 self._start(self._executor, search)
+            if background is not None:
+                search.owners.add(background)
             return search.future
 
     def _start(self, executor: ThreadPoolExecutor, search: _Search) -> None:
@@ -220,7 +241,7 @@ class FacetSearch:
             ):
                 return
             search.claimed = True
-        search.future.set_result(search.run())
+        search.future.set_result(self._find(search))
 
     def is_complete(self, future: Future[list[str]]) -> bool:
         """Check that all sources of the values of a facet could be searched.
@@ -236,22 +257,35 @@ class FacetSearch:
             False if a source could not be searched, so values may be missing.
         """
         with self._lock:
-            return not any(
-                search.future is future and key in self._incomplete
-                for key, search in self._searches.items()
-            )
+            return future not in self._incomplete
 
-    def cancel(self, futures: Collection[Future[list[str]]]) -> None:
-        """Cancel the searches that have not started yet.
+    def cancel(
+        self,
+        background: BackgroundSearch,
+        futures: Collection[Future[list[str]]],
+    ) -> None:
+        """Stop waiting for searches, and cancel those that wait for no one.
+
+        Only the searches that have not started yet and that no search for
+        completion or other background search waits for are cancelled.
 
         Parameters
         ----------
+        background:
+            The background search that stops waiting.
         futures:
             The values, from :meth:`submit`.
         """
         with self._lock:
             for key, search in list(self._searches.items()):
-                if search.future in futures and search.future.cancel():
+                if search.future not in futures:
+                    continue
+                search.owners.discard(background)
+                if (
+                    not search.owners
+                    and not search.interactive
+                    and search.future.cancel()
+                ):
                     del self._searches[key]
 
     def _remove_expired(self) -> None:
@@ -262,31 +296,28 @@ class FacetSearch:
         now = time.monotonic()
         for key, search in list(self._searches.items()):
             max_age = (
-                self.retry_age if key in self._incomplete else self.max_age
+                self.retry_age
+                if search.future in self._incomplete
+                else self.max_age
             )
             if now - search.start >= max_age and search.future.done():
                 del self._searches[key]
-                self._incomplete.discard(key)
 
-    def _find(
-        self,
-        key: Hashable,
-        sources: list[_Source],
-        project: str,
-        facets: Mapping[object, object],
-        facet: str,
-    ) -> list[str]:
+    def _find(self, search: _Search) -> list[str]:
         """Search and remember if a source could not be searched."""
         failures = esgf.failures()
-        values = _search(sources, project, facets, facet)
+        values = search.run()
         if esgf.failures() != failures:
             with self._lock:
-                self._incomplete.add(key)
+                self._incomplete.add(search.future)
         return values
 
 
 class BackgroundSearch:
     """Start searches that may wait for the searches for completion.
+
+    Searches that are shared with other background searches are only
+    cancelled when none of them waits for them anymore.
 
     Parameters
     ----------
@@ -304,7 +335,7 @@ class BackgroundSearch:
         facet: str,
     ) -> Future[list[str]] | None:
         """Start finding the values of a facet."""
-        return self._search.submit(project, facets, facet, background=True)
+        return self._search.submit(project, facets, facet, background=self)
 
     def is_complete(self, future: Future[list[str]]) -> bool:
         """Check that all sources could be searched."""
@@ -312,4 +343,4 @@ class BackgroundSearch:
 
     def cancel(self, futures: Collection[Future[list[str]]]) -> None:
         """Cancel the searches that have not started yet."""
-        self._search.cancel(futures)
+        self._search.cancel(self, futures)

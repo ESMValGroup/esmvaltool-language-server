@@ -84,6 +84,8 @@ class Populated:
     complete: bool
     """Whether all sources of data could be searched, so no dataset is
     missing."""
+    missing: list[str] = dataclasses.field(default_factory=list)
+    """The datasets that were not replaced because no data was found."""
 
 
 # Facets that :func:`esmvalcore.dataset.datasets_to_recipe` writes as ranges.
@@ -92,6 +94,9 @@ _RANGES = ("ensemble", "sub_experiment")
 
 # A glob pattern, as in :mod:`esmvalcore.dataset`.
 _PATTERN = re.compile(r".*[\*\?]+.*|.*\[.*\].*")
+
+# The properties of a node with an anchor: an optional tag and the anchor.
+_ANCHOR = re.compile(r"(?:!\S*\s+)?&")
 
 
 def _is_pattern(value: object) -> bool:
@@ -436,17 +441,34 @@ def _text(dataset: dict[object, object], *, flow: bool) -> str:
     return text.removesuffix("\n")
 
 
-def _end(node: yaml.Node) -> yaml.Mark:
+def _end_mark(node: yaml.Node) -> yaml.Mark:
     """Find the end of a node, without the lines after a block collection."""
     if isinstance(node, yaml.MappingNode | yaml.SequenceNode) and (
         not node.flow_style and node.value
     ):
         last = node.value[-1]
-        return _end(last[1] if isinstance(last, tuple) else last)
+        return _end_mark(last[1] if isinstance(last, tuple) else last)
     return node.end_mark
 
 
+def _end(text: str, node: yaml.Node) -> types.Position:
+    """Find the end of a node, without the line breaks after it.
+
+    A block scalar, e.g. ``|``, ends at the start of the line after it.
+    """
+    mark = _end_mark(node)
+    index = mark.index
+    while index > 0 and text[index - 1].isspace():
+        index -= 1
+    line_start = text.rfind("\n", 0, index) + 1
+    return types.Position(
+        line=mark.line - text.count("\n", index, mark.index),
+        character=index - line_start,
+    )
+
+
 def _edit(
+    text: str,
     sequence: yaml.Node,
     node: yaml.Node,
     datasets: list[dict[object, object]],
@@ -464,14 +486,13 @@ def _edit(
         # The new items start at the same column as the item.
         dash = sequence.start_mark.column
         separator = f"\n{' ' * dash}-{' ' * (column - dash - 1)}"
-    end = _end(node)
     return types.TextEdit(
         range=types.Range(
             start=types.Position(
                 line=node.start_mark.line,
                 character=column,
             ),
-            end=types.Position(line=end.line, character=end.column),
+            end=_end(text, node),
         ),
         new_text=separator.join(items),
     )
@@ -485,7 +506,7 @@ def _is_plain(text: str, parent: yaml.Node, node: yaml.Node) -> bool:
     """
     # The node of an alias is the node of its anchor, earlier in the text.
     start = node.start_mark.index
-    if start < parent.start_mark.index or text[start] == "&":
+    if start < parent.start_mark.index or _ANCHOR.match(text, start):
         return False
     if isinstance(node, yaml.SequenceNode):
         return all(_is_plain(text, node, item) for item in node.value)
@@ -521,12 +542,12 @@ def populate_edits(
     Returns
     -------
     :
-        The edits.
+        The edits. Datasets without data are not replaced.
 
     Raises
     ------
     SearchError
-        If the datasets cannot be found.
+        If the datasets cannot be searched for.
     SearchCancelledError
         If the user cancelled the search.
     yaml.YAMLError
@@ -543,11 +564,12 @@ def populate_edits(
     items = _replaceable(text, entries, sequence)
     steps = sum(len(_patterns(entry)) for entry, _ in items)
     searcher = _Searcher(search, progress or Progress(), steps=steps)
-    edits = []
+    edits, missing = [], []
     for entry, node in items:
-        datasets = _expand(searcher, groups, entry)
-        if not datasets:
-            msg = f"No data found for {_text(entry, flow=True)}."
-            raise SearchError(msg)
-        edits.append(_edit(sequence, node, _with_ranges(datasets, entry)))
-    return Populated(edits, complete=searcher.complete)
+        if datasets := _expand(searcher, groups, entry):
+            edits.append(
+                _edit(text, sequence, node, _with_ranges(datasets, entry)),
+            )
+        else:
+            missing.append(_text(entry, flow=True))
+    return Populated(edits, complete=searcher.complete, missing=missing)

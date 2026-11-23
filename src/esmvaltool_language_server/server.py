@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import logging
+import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
@@ -66,6 +68,10 @@ class RecipeLanguageServer(LanguageServer):
         # YAML.
         self.recipes: dict[str, object] = {}
         self.facet_search = FacetSearch()
+        # The searches for datasets that are running, by recipe and list.
+        self.populating: dict[
+            tuple[str, tuple[str | int, ...]], _Populating
+        ] = {}
         self.errata = ErrataService()
         # Looking up errata sends the datasets in recipes to the ESGF errata
         # service, so the user can turn it off.
@@ -551,13 +557,26 @@ def _show_message(
     )
 
 
+@dataclasses.dataclass(frozen=True)
+class _Populating:
+    """A search for the datasets of a list that is running."""
+
+    text: str
+    """The text of the recipe that is searched."""
+    stop: threading.Event = dataclasses.field(default_factory=threading.Event)
+    """Stop the search, because the recipe changed."""
+
+
 async def _search_datasets(
     ls: RecipeLanguageServer,
     text: str,
     path: tuple[str | int, ...],
+    stop: threading.Event,
 ) -> Populated | None:
     """Find the datasets with data, or None if they cannot be found."""
     token = await _begin_progress(ls, "Searching for datasets")
+    progress = _progress(ls, token)
+    cancelled = progress.cancelled
     try:
         return await asyncio.to_thread(
             populate_edits,
@@ -565,9 +584,16 @@ async def _search_datasets(
             path,
             # The many searches of the datasets should not slow down
             # completion.
-            ls.facet_search.background,
-            _progress(ls, token),
+            ls.facet_search.background(),
+            dataclasses.replace(
+                progress,
+                cancelled=lambda: stop.is_set() or cancelled(),
+            ),
         )
+    except asyncio.CancelledError:
+        # The editor cancelled the request: stop the thread too.
+        stop.set()
+        raise
     except SearchCancelledError:
         return None
     except (SearchError, yaml.YAMLError) as exc:
@@ -577,10 +603,100 @@ async def _search_datasets(
             f"The datasets were not replaced: {exc}",
         )
         return None
+    except Exception:
+        logger.exception("Failed to search for the datasets")
+        _show_message(
+            ls,
+            types.MessageType.Error,
+            "The datasets were not replaced, because of an unexpected error. "
+            "Refer to the output of the language server for details.",
+        )
+        return None
     finally:
         if token is not None:
             ls.work_done_progress.end(token, types.WorkDoneProgressEnd())
             ls.work_done_progress.tokens.pop(token, None)
+
+
+def _workspace_edit(
+    ls: RecipeLanguageServer,
+    uri: str,
+    version: int,
+    edits: list[types.TextEdit],
+) -> types.WorkspaceEdit:
+    """Edit a version of a document, if the editor can check the version."""
+    workspace = ls.client_capabilities.workspace
+    capabilities = None if workspace is None else workspace.workspace_edit
+    if capabilities is None or not capabilities.document_changes:
+        return types.WorkspaceEdit(changes={uri: list(edits)})
+    identifier = types.OptionalVersionedTextDocumentIdentifier(
+        uri=uri,
+        version=version,
+    )
+    return types.WorkspaceEdit(
+        document_changes=[
+            types.TextDocumentEdit(text_document=identifier, edits=edits),
+        ],
+    )
+
+
+_CHANGED = (
+    "The datasets were not replaced, because the recipe changed during the "
+    "search. Run the search again, which is faster the second time."
+)
+
+
+async def _apply(
+    ls: RecipeLanguageServer,
+    document: TextDocument,
+    version: int | None,
+    lines: list[str],
+    edits: list[types.TextEdit],
+) -> bool:
+    """Apply the edits to the version of the recipe that was searched."""
+    current = ls.workspace.get_text_document(document.uri)
+    if version is None or current.version != version:
+        _show_message(ls, types.MessageType.Warning, _CHANGED)
+        return False
+    for edit in edits:
+        edit.range = document.position_codec.range_to_client_units(
+            lines,
+            edit.range,
+        )
+    result = await ls.workspace_apply_edit_async(
+        types.ApplyWorkspaceEditParams(
+            label="Replace glob patterns by the datasets with data",
+            edit=_workspace_edit(ls, document.uri, version, edits),
+        ),
+    )
+    if not result.applied:
+        _show_message(
+            ls,
+            types.MessageType.Warning,
+            f"The datasets were not replaced: {result.failure_reason}"
+            if result.failure_reason
+            else _CHANGED,
+        )
+    return result.applied
+
+
+def _report(ls: RecipeLanguageServer, populated: Populated) -> None:
+    """Tell the user about the datasets that may be missing."""
+    if populated.missing:
+        _show_message(
+            ls,
+            types.MessageType.Warning,
+            "No data was found for "
+            + ", ".join(populated.missing)
+            + ", so these datasets were not replaced.",
+        )
+    if not populated.complete:
+        _show_message(
+            ls,
+            types.MessageType.Warning,
+            "Some sources of data could not be searched, so datasets may be "
+            "missing. Refer to the output of the language server for details.",
+        )
 
 
 @server.command(POPULATE_DATASETS)
@@ -593,43 +709,32 @@ async def populate_datasets(
     document = ls.workspace.get_text_document(uri)
     # The document changes while the user types.
     version, text, lines = document.version, document.source, document.lines
-    populated = await _search_datasets(ls, text, tuple(path))
+    key = (uri, tuple(path))
+    running = ls.populating.get(key)
+    if running is not None and running.text == text:
+        _show_message(
+            ls,
+            types.MessageType.Info,
+            "The datasets are already being searched for.",
+        )
+        return
+    if running is not None:
+        # The edits that the running search finds would not apply anymore.
+        running.stop.set()
+    populating = _Populating(text)
+    ls.populating[key] = populating
+    try:
+        populated = await _search_datasets(ls, text, key[1], populating.stop)
+    finally:
+        if ls.populating.get(key) is populating:
+            del ls.populating[key]
     if populated is None:
         return
-    for edit in populated.edits:
-        edit.range = document.position_codec.range_to_client_units(
-            lines,
-            edit.range,
-        )
-    identifier = types.OptionalVersionedTextDocumentIdentifier(
-        uri=uri,
-        version=version,
-    )
-    result = await ls.workspace_apply_edit_async(
-        types.ApplyWorkspaceEditParams(
-            label="Replace glob patterns by the datasets with data",
-            edit=types.WorkspaceEdit(
-                document_changes=[
-                    types.TextDocumentEdit(
-                        text_document=identifier,
-                        edits=list(populated.edits),
-                    ),
-                ],
-            ),
-        ),
-    )
-    if not result.applied:
-        _show_message(
-            ls,
-            types.MessageType.Warning,
-            "The datasets were not replaced, because the recipe changed "
-            "during the search. Run the search again, which is faster the "
-            "second time.",
-        )
-    elif not populated.complete:
-        _show_message(
-            ls,
-            types.MessageType.Warning,
-            "Some sources of data could not be searched, so datasets may be "
-            "missing. Refer to the output of the language server for details.",
-        )
+    if not populated.edits or await _apply(
+        ls,
+        document,
+        version,
+        lines,
+        populated.edits,
+    ):
+        _report(ls, populated)

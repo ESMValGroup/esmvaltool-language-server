@@ -192,8 +192,21 @@ def test_populate_diagnostic_datasets() -> None:
 
 def test_populate_variable_datasets() -> None:
     path = ("diagnostics", "diag", "variables", "pr", "additional_datasets")
-    with pytest.raises(SearchError, match=r"No data found for \{dataset: M"):
-        _edits(RECIPE, path)
+    populated = populate_edits(RECIPE, path, _Search())
+    assert populated.edits == []
+    assert populated.missing == [
+        "{dataset: M*, project: CMIP6, ensemble: r1i1p1f1}",
+    ]
+
+
+def test_populate_keeps_datasets_without_data() -> None:
+    text = RECIPE.replace("'UK*'", "'X*'")
+    populated = populate_edits(text, ("datasets",), _Search())
+    [edit] = populated.edits
+    assert edit.range.start.line == 1
+    assert populated.missing == [
+        "{dataset: X*, project: CMIP6, ensemble: '*'}"
+    ]
 
 
 def test_populate_several_items() -> None:
@@ -236,6 +249,9 @@ def test_populate_skips_anchors_and_aliases() -> None:
         "{dataset: '*', project: CMIP6, exp: [*exp]}",
         # An anchor inside the entry.
         "{dataset: '*', project: &other CMIP6}",
+        # An anchor after a tag.
+        "!!map &a {dataset: '*', project: CMIP6}",
+        "{dataset: '*', project: !!str &other CMIP6}",
     ],
 )
 def test_populate_skips_entries_with_aliases(entry: str) -> None:
@@ -547,3 +563,31 @@ def test_populate_experiments() -> None:
     )
     activities = ["CMIP", "ScenarioMIP"]
     assert searched == [("historical", activities), ("ssp585", activities)]
+
+
+@pytest.mark.parametrize("style", ["|", ">", "|+"])
+def test_populate_block_scalar(style: str) -> None:
+    text = dedent(f"""\
+        datasets:
+          - dataset: 'U*'
+            project: CMIP6
+            ensemble: r1i1p1f2
+            comment: {style}
+              A comment.
+
+          - {{dataset: ERA5, project: OBS6}}
+        diagnostics:
+          diag:
+            variables:
+              tas: {{mip: Amon}}
+        """)
+    [edit] = _edits(text)
+    assert edit.range.end == types.Position(line=5, character=16)
+    lines = text.splitlines(keepends=True)
+    new_text = (
+        "".join(lines[:1]) + "  - " + edit.new_text + "".join(lines[5:])[16:]
+    )
+    assert yaml.safe_load(new_text)["datasets"][1] == {
+        "dataset": "ERA5",
+        "project": "OBS6",
+    }

@@ -916,6 +916,35 @@ def test_stac_values_from_items(stac_session: _Session) -> None:
     assert stac_session.params[-1]["fields"] == "id,properties.cmip6:source_id"
 
 
+def test_stac_values_without_data(stac_session: _Session) -> None:
+    # The index can count the values, so no values means no data.
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    query = {"project": ["CMIP6"]}
+    assert esgf._stac_values(index, query, "source_id") == {"A": 4}
+    stac_session.responses["https://stac/collections/CMIP6/aggregate"] = (
+        _Response({"aggregations": [{"buckets": []}]})
+    )
+    assert esgf._stac_values(index, query, "source_id") == {}
+    assert "fields" not in stac_session.params[-1]
+
+
+def test_stac_values_from_items_again(stac_session: _Session) -> None:
+    # The index cannot count the values, so they are read from the items.
+    stac_session.responses["https://stac/collections/CMIP6/aggregate"] = (
+        _Response({"aggregations": [{"buckets": []}]})
+    )
+    stac_session.responses["https://stac/search"] = _Response(
+        {"features": [{"properties": {"cmip6:source_id": "A"}}]},
+    )
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    query = {"project": ["CMIP6"]}
+    assert esgf._stac_values(index, query, "source_id") == {"A": 1}
+    requests_before = len(stac_session.params)
+    assert esgf._stac_values(index, query, "source_id") == {"A": 1}
+    assert len(stac_session.params) == requests_before + 1
+    assert "fields" in stac_session.params[-1]
+
+
 def test_stac_values_from_too_many_items(stac_session: _Session) -> None:
     stac_session.responses["https://stac/collections/CMIP6/aggregate"] = (
         _Response({"aggregations": [{"buckets": []}]})

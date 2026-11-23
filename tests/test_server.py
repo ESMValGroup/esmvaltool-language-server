@@ -264,7 +264,13 @@ class _PopulateServer(server.RecipeLanguageServer):
     def __init__(self, text: str) -> None:
         super().__init__()
         self.protocol._workspace = Workspace(None)
-        self.protocol.client_capabilities = types.ClientCapabilities()
+        self.protocol.client_capabilities = types.ClientCapabilities(
+            workspace=types.WorkspaceClientCapabilities(
+                workspace_edit=types.WorkspaceEditClientCapabilities(
+                    document_changes=True,
+                ),
+            ),
+        )
         self.workspace.put_text_document(
             types.TextDocumentItem(
                 uri="file:///recipe_test.yml",
@@ -292,7 +298,9 @@ class _DatasetSearch:
 
     def __init__(self, *, complete: bool = True) -> None:
         self.complete = complete
-        self.background = self
+
+    def background(self) -> _DatasetSearch:
+        return self
 
     def submit(self, *_: object) -> Future[list[str]]:
         future: Future[list[str]] = Future()
@@ -404,6 +412,184 @@ async def test_populate_datasets_not_applied(
     [message] = ls.messages
     assert message.type == types.MessageType.Warning
     assert "the recipe changed" in message.message
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    ls.facet_search = _DatasetSearch()  # type: ignore[assignment]
+
+    async def reject(
+        _: types.ApplyWorkspaceEditParams,
+    ) -> types.ApplyWorkspaceEditResult:
+        return types.ApplyWorkspaceEditResult(
+            applied=False,
+            failure_reason="The file is read-only.",
+        )
+
+    monkeypatch.setattr(ls, "workspace_apply_edit_async", reject)
+    await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
+    [message] = ls.messages
+    assert message.message.endswith("The file is read-only.")
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_without_document_changes() -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    ls.protocol.client_capabilities = types.ClientCapabilities()
+    ls.facet_search = _DatasetSearch()  # type: ignore[assignment]
+    uri = "file:///recipe_test.yml"
+    await server.populate_datasets(ls, uri, ["datasets"])
+    [params] = ls.edits
+    assert params.edit.document_changes is None
+    [edit] = (params.edit.changes or {})[uri]
+    assert edit.new_text == "{dataset: CESM2, project: CMIP6}"
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_without_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    search = _DatasetSearch()
+
+    def submit(*_: object) -> Future[list[str]]:
+        future: Future[list[str]] = Future()
+        future.set_result([])
+        return future
+
+    monkeypatch.setattr(search, "submit", submit)
+    ls.facet_search = search  # type: ignore[assignment]
+    await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
+    assert not ls.edits
+    [message] = ls.messages
+    assert message.type == types.MessageType.Warning
+    assert "No data was found for {dataset: '*', project: CMIP6}" in (
+        message.message
+    )
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_unexpected_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    search = _DatasetSearch()
+
+    def submit(*_: object) -> Future[list[str]]:
+        raise RuntimeError
+
+    monkeypatch.setattr(search, "submit", submit)
+    ls.facet_search = search  # type: ignore[assignment]
+    await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
+    assert not ls.edits
+    [message] = ls.messages
+    assert message.type == types.MessageType.Error
+    assert "unexpected error" in message.message
+    assert not ls.populating
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_request_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    search = _DatasetSearch()
+    submitted = threading.Event()
+    stopped = threading.Event()
+
+    def submit(*_: object) -> Future[list[str]]:
+        submitted.set()
+        return Future()
+
+    monkeypatch.setattr(search, "submit", submit)
+    monkeypatch.setattr(search, "cancel", lambda _: stopped.set())
+    ls.facet_search = search  # type: ignore[assignment]
+    task = asyncio.create_task(
+        server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"]),
+    )
+    assert await asyncio.to_thread(submitted.wait, TIMEOUT)
+    # The editor cancels the request, so the thread stops searching.
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await asyncio.to_thread(stopped.wait, TIMEOUT)
+    assert not ls.populating
+
+
+def _change(ls: _PopulateServer, text: str, version: int) -> None:
+    ls.workspace.put_text_document(
+        types.TextDocumentItem(
+            uri="file:///recipe_test.yml",
+            language_id="yaml",
+            version=version,
+            text=text,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_changed_during_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    search = _DatasetSearch()
+    submit = search.submit
+
+    def change(*args: object) -> Future[list[str]]:
+        _change(ls, POPULATE_RECIPE + "# A comment.\n", 4)
+        return submit(*args)
+
+    monkeypatch.setattr(search, "submit", change)
+    ls.facet_search = search  # type: ignore[assignment]
+    await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
+    assert not ls.edits
+    [message] = ls.messages
+    assert "the recipe changed" in message.message
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    search = _DatasetSearch()
+    submit = search.submit
+    submitted = threading.Event()
+    pending: Future[list[str]] = Future()
+
+    def first(*_: object) -> Future[list[str]]:
+        submitted.set()
+        return pending
+
+    monkeypatch.setattr(search, "submit", first)
+    ls.facet_search = search  # type: ignore[assignment]
+    uri = "file:///recipe_test.yml"
+    running = asyncio.create_task(
+        server.populate_datasets(ls, uri, ["datasets"]),
+    )
+    assert await asyncio.to_thread(submitted.wait, TIMEOUT)
+    # The same datasets are already being searched for.
+    await server.populate_datasets(ls, uri, ["datasets"])
+    [message] = ls.messages
+    assert message.type == types.MessageType.Info
+    assert "already" in message.message
+    # The recipe changed, so the running search is stopped.
+    monkeypatch.setattr(search, "submit", submit)
+    _change(ls, POPULATE_RECIPE.replace("CMIP6", "CMIP5"), 4)
+    await asyncio.wait_for(
+        server.populate_datasets(ls, uri, ["datasets"]),
+        TIMEOUT,
+    )
+    await asyncio.wait_for(running, TIMEOUT)
+    [params] = ls.edits
+    [change] = params.edit.document_changes or []
+    assert isinstance(change, types.TextDocumentEdit)
+    assert change.text_document.version == 4
+    assert len(ls.messages) == 1
+    assert not ls.populating
 
 
 def _progress_server(
