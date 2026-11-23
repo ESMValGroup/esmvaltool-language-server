@@ -7,6 +7,8 @@ import difflib
 from esmvalcore.recipe import format_recipe
 from lsprotocol import types
 
+from esmvaltool_language_server.detection import top_level_keys
+
 
 def _position(lines: list[str], line: int) -> types.Position:
     """Get the position of the start of a line, or of the end of the text."""
@@ -20,6 +22,8 @@ def formatting_edits(text: str) -> list[types.TextEdit]:
 
     Only the lines that change are edited, so the editor keeps the position
     of the cursor in the other lines.
+    A recipe without top-level keys, such as a new, empty recipe, is not
+    formatted, because it would become ``{}``.
 
     Parameters
     ----------
@@ -36,6 +40,8 @@ def formatting_edits(text: str) -> list[types.TextEdit]:
     yaml.YAMLError
         If the text is not valid YAML.
     """
+    if not top_level_keys(text):
+        return []
     old = text.splitlines(keepends=True)
     new = format_recipe(text).splitlines(keepends=True)
     matcher = difflib.SequenceMatcher(a=old, b=new, autojunk=False)

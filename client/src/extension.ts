@@ -160,13 +160,18 @@ function restart(): Promise<void> {
 }
 
 /**
- * Format the recipe in the active editor with the language server.
+ * Format a recipe with the language server.
  *
  * This asks the language server directly, because the Format Document command
  * can use another extension that formats YAML files.
+ *
+ * @param uri - The recipe, which the button at the top of the editor passes,
+ *   or the recipe in the active editor if not given.
  */
-async function formatRecipe(): Promise<void> {
-  const document = vscode.window.activeTextEditor?.document;
+async function formatRecipe(uri?: vscode.Uri): Promise<void> {
+  const document = uri
+    ? await vscode.workspace.openTextDocument(uri)
+    : vscode.window.activeTextEditor?.document;
   if (!document) {
     return;
   }
@@ -177,18 +182,40 @@ async function formatRecipe(): Promise<void> {
     );
     return;
   }
-  const edits = await client.sendRequest(DocumentFormattingRequest.type, {
-    textDocument: { uri: document.uri.toString() },
-    options: { tabSize: 2, insertSpaces: true },
-  });
-  if (edits) {
-    const edit = new vscode.WorkspaceEdit();
-    edit.set(
-      document.uri,
-      await client.protocol2CodeConverter.asTextEdits(edits),
+  const version = document.version;
+  let edits: vscode.TextEdit[] | undefined;
+  try {
+    const result = await client.sendRequest(DocumentFormattingRequest.type, {
+      textDocument: { uri: document.uri.toString() },
+      options: { tabSize: 2, insertSpaces: true },
+    });
+    edits = result
+      ? await client.protocol2CodeConverter.asTextEdits(result)
+      : undefined;
+  } catch (error) {
+    void vscode.window.showErrorMessage(
+      `The recipe was not formatted: ${String(error)}`,
     );
-    await vscode.workspace.applyEdit(edit);
+    return;
   }
+  if (!edits) {
+    void vscode.window.showInformationMessage(
+      "The recipe was not formatted, because it is not valid YAML or not an " +
+        "ESMValTool recipe.",
+    );
+    return;
+  }
+  if (document.version !== version) {
+    // The edits are for the old text, so they would end up in the wrong place.
+    void vscode.window.showInformationMessage(
+      "The recipe was not formatted, because it changed while it was being " +
+        "formatted. Try again.",
+    );
+    return;
+  }
+  const edit = new vscode.WorkspaceEdit();
+  edit.set(document.uri, edits);
+  await vscode.workspace.applyEdit(edit);
 }
 
 /** Find the Python interpreter of the environment with ESMValTool. */

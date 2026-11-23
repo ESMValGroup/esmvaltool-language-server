@@ -145,18 +145,12 @@ describe("ESMValTool extension", () => {
     assert.equal(range.start.line, positionOf(document, "  pp:").line);
   });
 
-  it("formats the recipe", async () => {
+  /** Format the recipe, get the formatted text, and restore the recipe. */
+  async function formatted(format: () => Thenable<unknown>): Promise<string> {
     const text = document.getText();
-    const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
-      "vscode.executeFormatDocumentProvider",
-      document.uri,
-      { tabSize: 2, insertSpaces: true },
-    );
-    const edit = new vscode.WorkspaceEdit();
-    edit.set(document.uri, edits);
-    assert.ok(await vscode.workspace.applyEdit(edit));
     try {
-      assert.match(document.getText(), /^ {2}authors:\n {4}- andela_bouwe$/m);
+      await format();
+      return document.getText();
     } finally {
       const undo = new vscode.WorkspaceEdit();
       undo.replace(
@@ -166,23 +160,42 @@ describe("ESMValTool extension", () => {
       );
       await vscode.workspace.applyEdit(undo);
     }
+  }
+
+  const FORMATTED_AUTHORS = /^ {2}authors:\n {4}- andela_bouwe$/m;
+
+  it("formats the recipe", async () => {
+    const text = await formatted(async () => {
+      const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
+        "vscode.executeFormatDocumentProvider",
+        document.uri,
+        { tabSize: 2, insertSpaces: true },
+      );
+      const edit = new vscode.WorkspaceEdit();
+      edit.set(document.uri, edits);
+      assert.ok(await vscode.workspace.applyEdit(edit));
+    });
+    assert.match(text, FORMATTED_AUTHORS);
   });
 
   it("formats the recipe with the command", async () => {
     await vscode.window.showTextDocument(document);
-    const text = document.getText();
-    await vscode.commands.executeCommand("esmvaltool.formatRecipe");
-    try {
-      assert.match(document.getText(), /^ {2}authors:\n {4}- andela_bouwe$/m);
-    } finally {
-      const undo = new vscode.WorkspaceEdit();
-      undo.replace(
-        document.uri,
-        document.validateRange(new vscode.Range(0, 0, document.lineCount, 0)),
-        text,
-      );
-      await vscode.workspace.applyEdit(undo);
-    }
+    const text = await formatted(() =>
+      vscode.commands.executeCommand("esmvaltool.formatRecipe"),
+    );
+    assert.match(text, FORMATTED_AUTHORS);
+  });
+
+  it("formats the recipe of the button", async () => {
+    // The button passes its recipe, which need not be in the active editor.
+    await vscode.window.showTextDocument(
+      await vscode.workspace.openTextDocument({ content: "other" }),
+    );
+    const text = await formatted(() =>
+      vscode.commands.executeCommand("esmvaltool.formatRecipe", document.uri),
+    );
+    assert.match(text, FORMATTED_AUTHORS);
+    await vscode.window.showTextDocument(document);
   });
 
   it("runs a single language server after overlapping restarts", async () => {

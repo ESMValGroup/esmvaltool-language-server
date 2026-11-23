@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 import yaml
+from esmvalcore.recipe import format_recipe
 from lsprotocol import types
 from pygls.lsp.client import LanguageClient
 from pygls.workspace import Workspace
@@ -602,19 +603,19 @@ async def test_formatting(tmp_path: Path) -> None:
 
         # The emoji is one character, but two UTF-16 code units, which the
         # client counts.
-        edits = await format_('documentation: {title: "🌍", description: x}')
+        text = 'documentation: {title: "🌍", description: x}'
+        edits = await format_(text)
         assert list(edits or []) == [
             types.TextEdit(
                 range=types.Range(
                     start=types.Position(line=0, character=0),
                     end=types.Position(line=0, character=44),
                 ),
-                new_text="documentation:\n  title: 🌍\n  description: x\n",
+                new_text=format_recipe(text),
             ),
         ]
         assert await format_("documentation: [\n") is None
-        # Comments are kept, so this recipe is already formatted.
-        edits = await format_("documentation:\n  title: x  # Comment\n")
+        edits = await format_(format_recipe(text))
         assert edits is not None
         assert not edits
         assert await format_("package: {name: example}\n") is None

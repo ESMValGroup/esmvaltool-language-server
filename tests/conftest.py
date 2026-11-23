@@ -86,3 +86,23 @@ def _split_cursor(text: str) -> tuple[str, types.Position]:
 def split_cursor() -> Callable[[str], tuple[str, types.Position]]:
     """Remove the cursor, marked by `|`, from a text and get its position."""
     return _split_cursor
+
+
+def _apply_edits(text: str, edits: list[types.TextEdit]) -> str:
+    lines = text.splitlines(keepends=True)
+
+    def offset(position: types.Position) -> int:
+        return sum(map(len, lines[: position.line])) + position.character
+
+    for edit in sorted(
+        edits, key=lambda e: offset(e.range.start), reverse=True
+    ):
+        start, end = offset(edit.range.start), offset(edit.range.end)
+        text = text[:start] + edit.new_text + text[end:]
+    return text
+
+
+@pytest.fixture
+def apply_edits() -> Callable[[str, list[types.TextEdit]], str]:
+    """Apply edits with positions that count characters to a text."""
+    return _apply_edits

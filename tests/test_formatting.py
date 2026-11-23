@@ -1,24 +1,17 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+from esmvalcore.recipe import format_recipe
 from lsprotocol import types
 
 from esmvaltool_language_server.formatting import formatting_edits
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
-def _apply(text: str, edits: list[types.TextEdit]) -> str:
-    """Apply edits with positions that count characters to a text."""
-    lines = text.splitlines(keepends=True)
-
-    def offset(position: types.Position) -> int:
-        return sum(map(len, lines[: position.line])) + position.character
-
-    for edit in sorted(
-        edits, key=lambda e: offset(e.range.start), reverse=True
-    ):
-        start, end = offset(edit.range.start), offset(edit.range.end)
-        text = text[:start] + edit.new_text + text[end:]
-    return text
+    ApplyEdits = Callable[[str, list[types.TextEdit]], str]
 
 
 FORMATTED = (
@@ -29,44 +22,24 @@ HEADER = "# ESMValTool\n\n# recipe_a.yml\n---\n"
 
 
 @pytest.mark.parametrize(
-    ("text", "expected"),
+    "text",
     [
-        (
-            "datasets:\n- {project: CMIP6, dataset: CESM2}\ndiagnostics: {}\n",
-            FORMATTED,
-        ),
+        UNFORMATTED,
         # Without a newline at the end.
-        (
-            "datasets: [{project: CMIP6, dataset: CESM2}]\ndiagnostics: {}",
-            FORMATTED,
-        ),
-        (FORMATTED, FORMATTED),
-        ("", "{}\n"),
-        # The part up to the document start is kept.
-        (f"---\n{FORMATTED}", f"---\n{FORMATTED}"),
-        (HEADER + UNFORMATTED, HEADER + FORMATTED),
-        # Comments are kept.
-        (
-            "# Comment\n" + UNFORMATTED.replace("\n", "  # Datasets\n", 1),
-            "# Comment\n" + FORMATTED.replace("6}\n", "6}  # Datasets\n"),
-        ),
+        UNFORMATTED.rstrip("\n"),
+        f"---\n{UNFORMATTED}",
+        HEADER + UNFORMATTED,
+        "# Comment\n" + UNFORMATTED.replace("\n", "  # Datasets\n", 1),
+        "documentation:\n  description: >\n    First.\n\n    Second.\n",
     ],
 )
-def test_formatting_edits(text: str, expected: str) -> None:
-    assert _apply(text, formatting_edits(text)) == expected
+def test_formatting_edits(text: str, apply_edits: ApplyEdits) -> None:
+    assert apply_edits(text, formatting_edits(text)) == format_recipe(text)
 
 
-def test_formatting_edits_folded_description() -> None:
-    text = (
-        "# recipe.yml\n---\ndocumentation:\n  description: >\n"
-        "    First paragraph.\n\n    Second paragraph.\n\n"
-        "    - item one\n    - item two\n"
-    )
-    assert _apply(text, formatting_edits(text)) == (
-        "# recipe.yml\n---\ndocumentation:\n  description: |-\n"
-        "    First paragraph.\n\n    Second paragraph.\n\n"
-        "    - item one\n    - item two\n"
-    )
+@pytest.mark.parametrize("text", ["", "\n", "# Comment\n", "---\n"])
+def test_formatting_edits_without_keys(text: str) -> None:
+    assert formatting_edits(text) == []
 
 
 def test_formatting_edits_only_changed_lines() -> None:

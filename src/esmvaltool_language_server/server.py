@@ -425,7 +425,7 @@ def definition_(
 
 
 @server.feature(types.TEXT_DOCUMENT_FORMATTING)
-def formatting(
+async def formatting(
     ls: RecipeLanguageServer,
     params: types.DocumentFormattingParams,
 ) -> list[types.TextEdit] | None:
@@ -434,7 +434,8 @@ def formatting(
     if document is None:
         return None
     try:
-        edits = formatting_edits(document.source)
+        # Formatting a long recipe takes a while, so do not block the server.
+        edits = await asyncio.to_thread(formatting_edits, document.source)
     except yaml.YAMLError:
         # The problems in the recipe already show the syntax error.
         return None
