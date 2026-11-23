@@ -563,7 +563,9 @@ async def _search_datasets(
             populate_edits,
             text,
             path,
-            ls.facet_search,
+            # The many searches of the datasets should not slow down
+            # completion.
+            ls.facet_search.background,
             _progress(ls, token),
         )
     except SearchCancelledError:

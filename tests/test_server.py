@@ -292,6 +292,7 @@ class _DatasetSearch:
 
     def __init__(self, *, complete: bool = True) -> None:
         self.complete = complete
+        self.background = self
 
     def submit(self, *_: object) -> Future[list[str]]:
         future: Future[list[str]] = Future()

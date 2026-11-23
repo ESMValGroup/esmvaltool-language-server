@@ -101,8 +101,12 @@ authors and references it defines.
   with a code lens above `datasets` or `additional_datasets`, or a code
   action on that line in editors without code lenses.
   The datasets are found in the same way as the values for completion.
-  Ranges of ensemble members such as `r(1:10)i1p1f1` are kept only for the
-  datasets with data for every member.
+  Ranges of ensemble members such as `r(1:10)i1p1f1` and lists of
+  experiments such as `[historical, ssp585]`, which ESMValCore
+  concatenates, are kept only for the datasets with data for every member
+  and experiment.
+  Lists of other facets, such as `activity: [CMIP, ScenarioMIP]`, match data
+  for any of their values.
   As in ESMValCore, a variable with `derive: true` is found if there is data
   for the variable itself, or else for all the variables that it is derived
   from; with `force_derivation: true`, only the latter.

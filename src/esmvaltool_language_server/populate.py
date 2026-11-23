@@ -25,7 +25,7 @@ from esmvalcore.exceptions import RecipeError
 from esmvalcore.preprocessor._derive import get_required
 from lsprotocol import types
 
-from esmvaltool_language_server import timerange
+from esmvaltool_language_server import timerange, yaml_loader
 from esmvaltool_language_server.schema import data_at
 
 if TYPE_CHECKING:
@@ -141,8 +141,8 @@ def dataset_lists(text: str) -> list[tuple[Path, int]]:
         is not valid YAML.
     """
     try:
-        recipe = yaml.safe_load(text)
-        root = yaml.compose(text, Loader=yaml.SafeLoader)
+        recipe = yaml_loader.load(text)
+        root = yaml_loader.compose(text)
     except yaml.YAMLError:
         return []
     result = []
@@ -258,8 +258,9 @@ def _needs(
 ) -> list[list[list[dict[object, object]]]]:
     """Get the data that a dataset needs for a variable group.
 
-    The data of each ensemble member and sub-experiment of a range is needed,
-    from one of the alternative variables of :func:`_alternatives`.
+    The data of each ensemble member and sub-experiment of a range and of
+    each experiment of a list is needed, from one of the alternative
+    variables of :func:`_alternatives`.
     """
     facets = {**group, **dataset}
     try:
@@ -268,7 +269,23 @@ def _needs(
         ).from_ranges()
     except RecipeError as exc:
         raise SearchError(str(exc)) from exc
-    return [_alternatives({**facets, **m.facets}) for m in members]
+    return [
+        _alternatives({**facets, **m.facets, **experiment})
+        for m in members
+        for experiment in _experiments(m.facets)
+    ]
+
+
+def _experiments(facets: Mapping[object, object]) -> list[dict[str, object]]:
+    """Get each experiment of a list of experiments.
+
+    ESMValCore concatenates the data of the experiments, so the data of each
+    one is needed. The values of other facets with a list are alternatives.
+    """
+    experiments = facets.get("exp")
+    if not isinstance(experiments, list):
+        return [{}]
+    return [{"exp": experiment} for experiment in experiments]
 
 
 @dataclasses.dataclass
@@ -515,9 +532,9 @@ def populate_edits(
     yaml.YAMLError
         If the text is not valid YAML.
     """
-    recipe = yaml.safe_load(text)
+    recipe = yaml_loader.load(text)
     entries = data_at(recipe, path)
-    nodes = _nodes(yaml.compose(text, Loader=yaml.SafeLoader), path)
+    nodes = _nodes(yaml_loader.compose(text), path)
     groups = _groups(recipe, path)
     if not groups or nodes is None or not isinstance(entries, list):
         msg = "No variable groups use these datasets."

@@ -501,3 +501,41 @@ def test_populate_ensemble_list_with_range() -> None:
     text = RECIPE.replace("'r*i1p1f1'", "[r1i1p1f1, 'r(2:3)i1p1f1']")
     with pytest.raises(SearchError, match="cannot be combined"):
         _edits(text)
+
+
+def test_populate_experiments() -> None:
+    # Each experiment of a list is needed, but any of the activities.
+    data = {
+        "historical": {"CESM2", "MIROC6"},
+        "ssp585": {"CESM2", "UKESM1-0-LL"},
+    }
+    searched = []
+
+    def find(
+        project: str,
+        facets: Mapping[object, object],
+        facet: str,
+    ) -> Future[list[str]] | None:
+        searched.append((facets["exp"], facets["activity"]))
+        future: Future[list[str]] = Future()
+        future.set_result(sorted(data[str(facets["exp"])]))
+        return future
+
+    text = dedent("""\
+        datasets:
+          - dataset: '*'
+            project: CMIP6
+            exp: [historical, ssp585]
+            activity: [CMIP, ScenarioMIP]
+        diagnostics:
+          diag:
+            variables:
+              tas: {mip: Amon}
+        """)
+    [edit] = _edits(text, search=_Search(find))
+    assert edit.new_text == (
+        "dataset: CESM2\n    project: CMIP6\n    exp: [historical, ssp585]\n"
+        "    activity: [CMIP, ScenarioMIP]"
+    )
+    activities = ["CMIP", "ScenarioMIP"]
+    assert searched == [("historical", activities), ("ssp585", activities)]
