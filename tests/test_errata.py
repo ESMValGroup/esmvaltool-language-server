@@ -290,6 +290,9 @@ def test_affects(facets: dict[str, object], *, expected: bool) -> None:
 def test_errata_online(tmp_path: Path) -> None:
     # Notice when the API of the errata service changes.
     service = errata.ErrataService(cache=tmp_path / "errata")
+    # Connecting to the errata service from CI sometimes times out.
+    retry = urllib3.Retry(connect=3, backoff_factor=1)
+    service.session.mount("https://", HTTPAdapter(max_retries=retry))
     found = service.errata("CMIP6", "CESM2", experiments=("historical",))
     assert not service.failed
     assert found

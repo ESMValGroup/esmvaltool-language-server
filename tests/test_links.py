@@ -19,9 +19,11 @@ from urllib.parse import urldefrag, urlsplit
 
 import pytest
 import requests
+import urllib3
 import yaml
 from esmvalcore.config import CFG
 from lsprotocol import types
+from requests.adapters import HTTPAdapter
 
 from esmvaltool_language_server import references, vocabulary
 from esmvaltool_language_server.errata import Erratum
@@ -203,6 +205,9 @@ def _projects_recipe() -> str:
 def _session() -> requests.Session:
     session = requests.Session()
     session.headers["User-Agent"] = "esmvaltool-language-server link check"
+    # Connecting to some websites from CI sometimes times out.
+    retry = urllib3.Retry(connect=3, backoff_factor=1)
+    session.mount("https://", HTTPAdapter(max_retries=retry))
     return session
 
 
