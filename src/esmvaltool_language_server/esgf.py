@@ -480,7 +480,11 @@ def _stac_item_values(
     query: Query,
     name: str,
 ) -> dict[str, int]:
-    """Count the values of a property in the datasets on STAC."""
+    """Count the values of a property in the first datasets on STAC.
+
+    If there are more datasets, values may be missing, which is recorded as
+    a failure.
+    """
     response = index.session.get(
         f"https://{index.url}/search",
         params={
@@ -492,10 +496,16 @@ def _stac_item_values(
         timeout=TIMEOUT,
     )
     response.raise_for_status()
-    values = (
-        item.get("properties", {}).get(name)
-        for item in response.json()["features"]
-    )
+    items = response.json()["features"]
+    if len(items) >= _MAX_DATASETS:
+        logger.warning(
+            "Only read the %s of the first %s datasets on %s",
+            name,
+            len(items),
+            index,
+        )
+        record_failure(index)
+    values = (item.get("properties", {}).get(name) for item in items)
     return Counter(str(v) for v in values if v is not None)
 
 

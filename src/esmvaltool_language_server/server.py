@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
     from pygls.workspace import TextDocument
 
+    from esmvaltool_language_server.populate import Populated
+
 from esmvaltool_language_server import __version__, references
 from esmvaltool_language_server.completion import Options, completions
 from esmvaltool_language_server.definition import definition
@@ -27,6 +29,8 @@ from esmvaltool_language_server.diagnostics import check_recipe
 from esmvaltool_language_server.errata import ErrataService, errata_diagnostics
 from esmvaltool_language_server.hover import hover
 from esmvaltool_language_server.populate import (
+    Progress,
+    SearchCancelledError,
     SearchError,
     dataset_lists,
     populate_edits,
@@ -335,7 +339,9 @@ async def completion(
         future = ls.facet_search.submit(project, facets, facet)
         if future is None:
             return []
-        if future.done():
+        # The search may have been cancelled before it started, by a search
+        # for datasets.
+        if future.done() and not future.cancelled():
             return future.result()
         pending.append(future)
         return None
@@ -496,16 +502,83 @@ def code_action(
 
 
 async def _begin_progress(ls: RecipeLanguageServer, title: str) -> str | None:
-    """Show progress, if the editor supports it."""
+    """Show progress that the user can cancel, if the editor supports it."""
     window = ls.client_capabilities.window
     if window is None or not window.work_done_progress:
         return None
     token = str(uuid.uuid4())
     await ls.work_done_progress.create_async(token)
     ls.work_done_progress.begin(
-        token, types.WorkDoneProgressBegin(title=title)
+        token,
+        types.WorkDoneProgressBegin(title=title, cancellable=True),
     )
     return token
+
+
+def _progress(ls: RecipeLanguageServer, token: str | None) -> Progress:
+    """Report progress from another thread."""
+    if token is None:
+        return Progress()
+    loop = asyncio.get_running_loop()
+    progress = ls.work_done_progress
+
+    def send(value: types.WorkDoneProgressReport) -> None:
+        # The token is removed when the progress ends.
+        if token in progress.tokens:
+            progress.report(token, value)
+
+    def report(message: str, percentage: int) -> None:
+        value = types.WorkDoneProgressReport(
+            message=message,
+            percentage=percentage,
+        )
+        loop.call_soon_threadsafe(send, value)
+
+    # The editor cancels the progress by cancelling this future.
+    cancel = progress.tokens.get(token)
+    if cancel is None:
+        return Progress(report=report)
+    return Progress(report=report, cancelled=cancel.cancelled)
+
+
+def _show_message(
+    ls: RecipeLanguageServer,
+    message_type: types.MessageType,
+    message: str,
+) -> None:
+    ls.window_show_message(
+        types.ShowMessageParams(type=message_type, message=message),
+    )
+
+
+async def _search_datasets(
+    ls: RecipeLanguageServer,
+    text: str,
+    path: tuple[str | int, ...],
+) -> Populated | None:
+    """Find the datasets with data, or None if they cannot be found."""
+    token = await _begin_progress(ls, "Searching for datasets")
+    try:
+        return await asyncio.to_thread(
+            populate_edits,
+            text,
+            path,
+            ls.facet_search,
+            _progress(ls, token),
+        )
+    except SearchCancelledError:
+        return None
+    except (SearchError, yaml.YAMLError) as exc:
+        _show_message(
+            ls,
+            types.MessageType.Error,
+            f"The datasets were not replaced: {exc}",
+        )
+        return None
+    finally:
+        if token is not None:
+            ls.work_done_progress.end(token, types.WorkDoneProgressEnd())
+            ls.work_done_progress.tokens.pop(token, None)
 
 
 @server.command(POPULATE_DATASETS)
@@ -516,46 +589,45 @@ async def populate_datasets(
 ) -> None:
     """Replace the datasets with glob patterns in a list by those with data."""
     document = ls.workspace.get_text_document(uri)
-    version = document.version
-    token = await _begin_progress(ls, "Searching for datasets")
-    loop = asyncio.get_running_loop()
-    try:
-        edits = await loop.run_in_executor(
-            None,
-            populate_edits,
-            document.source,
-            tuple(path),
-            ls.facet_search.submit,
-        )
-    except (SearchError, yaml.YAMLError) as exc:
-        ls.window_show_message(
-            types.ShowMessageParams(
-                type=types.MessageType.Error,
-                message=f"The datasets were not replaced: {exc}",
-            ),
-        )
+    # The document changes while the user types.
+    version, text, lines = document.version, document.source, document.lines
+    populated = await _search_datasets(ls, text, tuple(path))
+    if populated is None:
         return
-    finally:
-        if token is not None:
-            ls.work_done_progress.end(token, types.WorkDoneProgressEnd())
-    for edit in edits:
+    for edit in populated.edits:
         edit.range = document.position_codec.range_to_client_units(
-            document.lines,
+            lines,
             edit.range,
         )
-    await ls.workspace_apply_edit_async(
+    identifier = types.OptionalVersionedTextDocumentIdentifier(
+        uri=uri,
+        version=version,
+    )
+    result = await ls.workspace_apply_edit_async(
         types.ApplyWorkspaceEditParams(
             label="Replace glob patterns by the datasets with data",
             edit=types.WorkspaceEdit(
                 document_changes=[
                     types.TextDocumentEdit(
-                        text_document=types.OptionalVersionedTextDocumentIdentifier(
-                            uri=uri,
-                            version=version,
-                        ),
-                        edits=list(edits),
+                        text_document=identifier,
+                        edits=list(populated.edits),
                     ),
                 ],
             ),
         ),
     )
+    if not result.applied:
+        _show_message(
+            ls,
+            types.MessageType.Warning,
+            "The datasets were not replaced, because the recipe changed "
+            "during the search. Run the search again, which is faster the "
+            "second time.",
+        )
+    elif not populated.complete:
+        _show_message(
+            ls,
+            types.MessageType.Warning,
+            "Some sources of data could not be searched, so datasets may be "
+            "missing. Refer to the output of the language server for details.",
+        )

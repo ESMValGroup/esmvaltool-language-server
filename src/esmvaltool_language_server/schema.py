@@ -164,6 +164,15 @@ class RecipeSchema:
                 result.add(_json_type(schema["const"]))
         return result
 
+    def allows_any_string(self, nodes: list[JSONSchema]) -> bool:
+        """Check if the schemas allow strings other than listed values."""
+        return any(
+            "string" in ([types] if isinstance(types, str) else types)
+            and "enum" not in schema
+            for schema in self._expand_all(nodes, MISSING)
+            if (types := schema.get("type", []))
+        )
+
 
 def to_yaml(value: object) -> str:
     """Write a value as YAML, on one line if possible."""

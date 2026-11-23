@@ -100,9 +100,19 @@ authors and references it defines.
   by the datasets that have data for every variable group that uses them,
   with a code lens above `datasets` or `additional_datasets`, or a code
   action on that line in editors without code lenses.
-  The datasets are found in the same way as the values for completion, with
-  ranges of ensemble members such as `r(1:10)i1p1f1`.
-  This can take a minute if there are many datasets.
+  The datasets are found in the same way as the values for completion.
+  Ranges of ensemble members such as `r(1:10)i1p1f1` are kept only for the
+  datasets with data for every member.
+  As in ESMValCore, a variable with `derive: true` is found if there is data
+  for the variable itself, or else for all the variables that it is derived
+  from; with `force_derivation: true`, only the latter.
+  Datasets with anchors, aliases, or `<<` are not replaced.
+  The new datasets are written in the style of the dataset with glob
+  patterns, `{...}` or one facet per line.
+  This can take a minute if there are many datasets; the progress shows what
+  is being searched, and the search can be cancelled.
+  A warning is shown if some sources of data could not be searched, so
+  datasets may be missing.
 
 Other tools also use files named like recipes, for example `recipe.yaml` of
 conda-forge.
@@ -189,6 +199,9 @@ command, for example `"/path/to/env/bin/esmvaltool-language-server"`.
 Problems are shown with Flymake, completion works with
 `completion-at-point` (`C-M-i`), documentation is shown by ElDoc, and `M-.`
 goes to a definition.
+To replace the datasets with glob patterns in a list, put the cursor on the
+line of `datasets` or `additional_datasets` and run
+`M-x eglot-code-actions`.
 To turn off the errata of datasets, add `:initializationOptions (:errata
 :json-false)` after `"--stdio"` in the command above.
 

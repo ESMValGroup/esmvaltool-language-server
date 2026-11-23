@@ -1,5 +1,9 @@
 // Tests that run the extension and the language server in VSCode.
 import * as assert from "node:assert/strict";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import process from "node:process";
 
 import * as vscode from "vscode";
 
@@ -17,6 +21,65 @@ async function waitFor<T>(
     }
     if (Date.now() > deadline) {
       throw new Error(`Timed out waiting for ${description}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+/**
+ * Create a recipe and a configuration of ESMValCore with local data, so that
+ * the datasets are found without searching ESGF.
+ */
+async function localData(): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "esmvaltool-"));
+  for (const dataset of ["ERA5", "MERRA2"]) {
+    const data = path.join(dir, "data", "Tier3", dataset);
+    await fs.mkdir(data, { recursive: true });
+    const file = `OBS6_${dataset}_reanaly_v1_Amon_tas_199001-199112.nc`;
+    await fs.writeFile(path.join(data, file), "");
+  }
+  await fs.mkdir(path.join(dir, "config"));
+  await fs.writeFile(
+    path.join(dir, "config", "data.yml"),
+    [
+      "projects:",
+      "  OBS6:",
+      "    data:",
+      "      local:",
+      "        type: esmvalcore.io.local.LocalDataSource",
+      `        rootpath: ${JSON.stringify(path.join(dir, "data"))}`,
+      "        dirname_template: Tier{tier}/{dataset}",
+      "        filename_template: " +
+        "'{project}_{dataset}_{type}_{version}_{mip}_{short_name}[_.]*nc'",
+      "",
+    ].join("\n"),
+  );
+  await fs.writeFile(
+    path.join(dir, "recipe_populate.yml"),
+    [
+      "datasets:",
+      "  - {dataset: '*', project: OBS6, type: reanaly, version: v1, tier: 3}",
+      "diagnostics:",
+      "  diag:",
+      "    variables:",
+      "      tas: {mip: Amon}",
+      "    scripts: null",
+      "",
+    ].join("\n"),
+  );
+  return dir;
+}
+
+/** Get the code lenses of a document, once the language server sends them. */
+async function codeLenses(uri: vscode.Uri): Promise<vscode.CodeLens[]> {
+  const deadline = Date.now() + TIMEOUT;
+  for (;;) {
+    const lenses = await vscode.commands.executeCommand<vscode.CodeLens[]>(
+      "vscode.executeCodeLensProvider",
+      uri,
+    );
+    if (lenses.length > 0 || Date.now() > deadline) {
+      return lenses;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
@@ -166,6 +229,41 @@ describe("ESMValTool extension", () => {
         new vscode.Range(position, position.translate(1, 0)),
       );
       await vscode.workspace.applyEdit(undo);
+    }
+  });
+
+  it("replaces glob patterns by datasets", async () => {
+    const dir = await localData();
+    const previous = process.env.ESMVALTOOL_CONFIG_DIR;
+    process.env.ESMVALTOOL_CONFIG_DIR = path.join(dir, "config");
+    try {
+      // The language server reads the configuration when it starts.
+      await vscode.commands.executeCommand("esmvaltool.restartLanguageServer");
+      const recipe = await vscode.workspace.openTextDocument(
+        path.join(dir, "recipe_populate.yml"),
+      );
+      await vscode.window.showTextDocument(recipe);
+      const [lens] = await codeLenses(recipe.uri);
+      const command = lens.command;
+      assert.ok(command);
+      const args: unknown[] = command.arguments ?? [];
+      await vscode.commands.executeCommand(command.command, ...args);
+      assert.deepEqual(recipe.getText().split("\n").slice(1, 3), [
+        "  - {dataset: ERA5, project: OBS6, type: reanaly, version: v1, tier: 3}",
+        "  - {dataset: MERRA2, project: OBS6, type: reanaly, version: v1, tier: 3}",
+      ]);
+      await vscode.commands.executeCommand(
+        "workbench.action.revertAndCloseActiveEditor",
+      );
+      await vscode.window.showTextDocument(document);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ESMVALTOOL_CONFIG_DIR;
+      } else {
+        process.env.ESMVALTOOL_CONFIG_DIR = previous;
+      }
+      await vscode.commands.executeCommand("esmvaltool.restartLanguageServer");
+      await fs.rm(dir, { recursive: true });
     }
   });
 

@@ -216,6 +216,20 @@ async def test_completion_without_facet_search() -> None:
     assert not result.is_incomplete
 
 
+@pytest.mark.asyncio
+async def test_completion_with_cancelled_facet_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A search for datasets cancelled the search before it started.
+    monkeypatch.setattr(server, "FACET_SEARCH_SECONDS", 0.1)
+    search = _FacetSearch()
+    search.future.cancel()
+    ls = _exp_completion_server(search)
+    result = await server.completion(ls, _exp_completion_params())
+    assert result.is_incomplete
+    assert not result.items
+
+
 POPULATE_RECIPE = (
     "datasets:\n"
     "  - {dataset: '*', project: CMIP6}\n"
@@ -276,10 +290,19 @@ class _PopulateServer(server.RecipeLanguageServer):
 class _DatasetSearch:
     """Find CESM2 for any search."""
 
+    def __init__(self, *, complete: bool = True) -> None:
+        self.complete = complete
+
     def submit(self, *_: object) -> Future[list[str]]:
         future: Future[list[str]] = Future()
         future.set_result(["CESM2"])
         return future
+
+    def is_complete(self, _: Future[list[str]]) -> bool:
+        return self.complete
+
+    def cancel(self, _: object) -> None:
+        pass
 
 
 @pytest.mark.asyncio
@@ -350,6 +373,132 @@ async def test_populate_datasets_progress(
         types.WorkDoneProgressBegin,
         types.WorkDoneProgressEnd,
     ]
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_incomplete() -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    ls.facet_search = _DatasetSearch(complete=False)  # type: ignore[assignment]
+    await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
+    assert ls.edits
+    [message] = ls.messages
+    assert message.type == types.MessageType.Warning
+    assert "datasets may be missing" in message.message
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_not_applied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls = _PopulateServer(POPULATE_RECIPE)
+    ls.facet_search = _DatasetSearch()  # type: ignore[assignment]
+
+    async def reject(
+        _: types.ApplyWorkspaceEditParams,
+    ) -> types.ApplyWorkspaceEditResult:
+        return types.ApplyWorkspaceEditResult(applied=False)
+
+    monkeypatch.setattr(ls, "workspace_apply_edit_async", reject)
+    await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
+    [message] = ls.messages
+    assert message.type == types.MessageType.Warning
+    assert "the recipe changed" in message.message
+
+
+def _progress_server(
+    monkeypatch: pytest.MonkeyPatch,
+    text: str,
+) -> tuple[_PopulateServer, list[object]]:
+    """Create a server that records the progress that it reports."""
+    ls = _PopulateServer(text)
+    ls.protocol.client_capabilities = types.ClientCapabilities(
+        window=types.WindowClientCapabilities(work_done_progress=True),
+    )
+    progress = ls.work_done_progress
+    reported: list[object] = []
+
+    async def create_async(token: str) -> None:
+        progress.tokens[token] = Future()
+
+    def notify(_: str, params: types.ProgressParams) -> None:
+        reported.append(params.value)
+
+    monkeypatch.setattr(progress, "create_async", create_async)
+    monkeypatch.setattr(ls.protocol, "notify", notify)
+    return ls, reported
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_reports_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls, reported = _progress_server(monkeypatch, POPULATE_RECIPE)
+    search = _DatasetSearch()
+
+    def submit(*_: object) -> Future[list[str]]:
+        # Find the values after a while, so the progress is reported.
+        future: Future[list[str]] = Future()
+        threading.Timer(0.5, future.set_result, [["CESM2"]]).start()
+        return future
+
+    monkeypatch.setattr(search, "submit", submit)
+    ls.facet_search = search  # type: ignore[assignment]
+    await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
+    begin, *reports, end = reported
+    assert isinstance(begin, types.WorkDoneProgressBegin)
+    assert begin.cancellable
+    assert reports
+    assert all(isinstance(r, types.WorkDoneProgressReport) for r in reports)
+    assert isinstance(end, types.WorkDoneProgressEnd)
+    assert not ls.work_done_progress.tokens
+    assert ls.edits
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ls, reported = _progress_server(monkeypatch, POPULATE_RECIPE)
+    search = _DatasetSearch()
+    pending: Future[list[str]] = Future()
+
+    def submit(*_: object) -> Future[list[str]]:
+        # The editor cancels the progress during the search.
+        [cancel] = ls.work_done_progress.tokens.values()
+        cancel.cancel()
+        return pending
+
+    monkeypatch.setattr(search, "submit", submit)
+    ls.facet_search = search  # type: ignore[assignment]
+    await asyncio.wait_for(
+        server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"]),
+        TIMEOUT,
+    )
+    assert not ls.edits
+    assert not ls.messages
+    assert isinstance(reported[-1], types.WorkDoneProgressEnd)
+
+
+@pytest.mark.asyncio
+async def test_populate_datasets_command(tmp_path: Path) -> None:
+    published: asyncio.Queue[types.PublishDiagnosticsParams] = asyncio.Queue()
+    async with _client(published) as client:
+        messages: asyncio.Queue[types.ShowMessageParams] = asyncio.Queue()
+
+        @client.feature(types.WINDOW_SHOW_MESSAGE)
+        def show(params: types.ShowMessageParams) -> None:
+            messages.put_nowait(params)
+
+        uri = (tmp_path / "recipe_test.yml").as_uri()
+        _open(client, uri, POPULATE_RECIPE.replace("diagnostics", "other"))
+        await client.workspace_execute_command_async(
+            types.ExecuteCommandParams(
+                command=server.POPULATE_DATASETS,
+                arguments=[uri, ["datasets"]],
+            ),
+        )
+        message = await asyncio.wait_for(messages.get(), TIMEOUT)
+        assert "No variable groups" in message.message
 
 
 _ERRATUM = types.Diagnostic(

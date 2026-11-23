@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 import pytest
@@ -9,6 +11,8 @@ from esmvaltool_language_server import esgf, search
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+TIMEOUT = 10
 
 
 class _Source:
@@ -168,3 +172,48 @@ def test_facet_search_remembers_failure_until_retry(source: _Source) -> None:
     assert first is not None
     first.result()
     assert facet_search.submit("CMIP6", {}, "dataset") is first
+
+
+def test_facet_search_is_complete(source: _Source) -> None:
+    facet_search = search.FacetSearch()
+    complete = facet_search.submit("CMIP6", {}, "dataset")
+    assert complete is not None
+    complete.result()
+    assert facet_search.is_complete(complete)
+    source.values = []
+    incomplete = facet_search.submit("CMIP6", {"exp": "historical"}, "dataset")
+    assert incomplete is not None
+    incomplete.result()
+    assert not facet_search.is_complete(incomplete)
+
+
+def test_facet_search_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+    source: _Source,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    def facet_values(*_: object) -> list[str]:
+        started.set()
+        release.wait(TIMEOUT)
+        return ["A"]
+
+    monkeypatch.setattr(source, "facet_values", facet_values)
+    facet_search = search.FacetSearch()
+    facet_search._executor = ThreadPoolExecutor(max_workers=1)
+    running = facet_search.submit("CMIP6", {"exp": "a"}, "dataset")
+    assert started.wait(TIMEOUT)
+    queued = facet_search.submit("CMIP6", {"exp": "b"}, "dataset")
+    assert running is not None
+    assert queued is not None
+    facet_search.cancel([running, queued])
+    release.set()
+    # Searches that have started are finished, so they can be used later.
+    assert running.result() == ["A"]
+    assert facet_search.submit("CMIP6", {"exp": "a"}, "dataset") is running
+    assert queued.cancelled()
+    again = facet_search.submit("CMIP6", {"exp": "b"}, "dataset")
+    assert again is not queued
+    assert again is not None
+    assert again.result() == ["A"]

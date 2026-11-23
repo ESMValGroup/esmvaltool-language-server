@@ -300,7 +300,13 @@ def _value_items(
                 documentation.get(label),
             )
             for label in (
-                to_yaml(_typed(value, schema.types(nodes)))
+                to_yaml(
+                    _typed(
+                        value,
+                        schema.types(nodes),
+                        any_string=schema.allows_any_string(nodes),
+                    ),
+                )
                 for value in available
             )
         ]
@@ -374,9 +380,14 @@ def _available_values(
     return sorted(set().union(*known))
 
 
-def _typed(value: str, allowed: set[str]) -> object:
-    """Convert a value to a number if the schema does not allow a string."""
-    if "string" in allowed or not allowed & {"integer", "number"}:
+def _typed(value: str, allowed: set[str], *, any_string: bool) -> object:
+    """Convert a value to a number if the schema allows it.
+
+    Values are kept as strings if the schema allows any string, or no
+    numbers. Numbers are preferred if the schema only allows some strings,
+    as for the tier, which can be ``3`` or ``'3'``.
+    """
+    if any_string or not allowed & {"integer", "number"}:
         return value
     number = yaml.safe_load(value)
     if isinstance(number, int | float) and not isinstance(number, bool):

@@ -914,3 +914,21 @@ def test_stac_values_from_items(stac_session: _Session) -> None:
     query = {"project": ["CMIP6"]}
     assert esgf._stac_values(index, query, "source_id") == {"A": 2}
     assert stac_session.params[-1]["fields"] == "id,properties.cmip6:source_id"
+
+
+def test_stac_values_from_too_many_items(stac_session: _Session) -> None:
+    stac_session.responses["https://stac/collections/CMIP6/aggregate"] = (
+        _Response({"aggregations": [{"buckets": []}]})
+    )
+    items = [{"properties": {"cmip6:source_id": "A"}}] * esgf._MAX_DATASETS
+    stac_session.responses["https://stac/search"] = _Response(
+        {"features": items},
+    )
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    before = esgf.failures()
+    query = {"project": ["CMIP6"]}
+    assert esgf._stac_values(index, query, "source_id") == {
+        "A": esgf._MAX_DATASETS,
+    }
+    # Other datasets may have other values.
+    assert esgf.failures() == before + 1

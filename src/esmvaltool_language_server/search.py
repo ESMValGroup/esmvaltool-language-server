@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from typing import TYPE_CHECKING, Protocol
@@ -13,7 +14,7 @@ from esmvalcore.config import CFG
 from esmvaltool_language_server import esgf, files
 
 if TYPE_CHECKING:
-    from collections.abc import Hashable, Mapping
+    from collections.abc import Collection, Hashable, Mapping
     from collections.abc import Set as AbstractSet
 
 logger = logging.getLogger(__name__)
@@ -91,6 +92,8 @@ def _search(
 class FacetSearch:
     """Find the values of facets of the available data in the background.
 
+    The searches can be started from several threads.
+
     Parameters
     ----------
     max_age:
@@ -110,6 +113,7 @@ class FacetSearch:
         self._incomplete: set[Hashable] = set()
         self._executor = ThreadPoolExecutor(max_workers=4)
         self._searches: dict[Hashable, tuple[float, Future[list[str]]]] = {}
+        self._lock = threading.Lock()
 
     def submit(
         self,
@@ -144,21 +148,57 @@ class FacetSearch:
         known -= {facet, "project"}
         relevant = {k: v for k, v in facets.items() if k in known}
         key = (project, facet, repr(sorted(relevant.items(), key=str)))
-        self._remove_expired()
-        if key not in self._searches:
-            future = self._executor.submit(
-                self._find,
-                key,
-                sources,
-                project,
-                relevant,
-                facet,
+        with self._lock:
+            self._remove_expired()
+            if key not in self._searches:
+                future = self._executor.submit(
+                    self._find,
+                    key,
+                    sources,
+                    project,
+                    relevant,
+                    facet,
+                )
+                self._searches[key] = (time.monotonic(), future)
+            return self._searches[key][1]
+
+    def is_complete(self, future: Future[list[str]]) -> bool:
+        """Check that all sources of the values of a facet could be searched.
+
+        Parameters
+        ----------
+        future:
+            The values, from :meth:`submit`.
+
+        Returns
+        -------
+        :
+            False if a source could not be searched, so values may be missing.
+        """
+        with self._lock:
+            return not any(
+                found is future and key in self._incomplete
+                for key, (_, found) in self._searches.items()
             )
-            self._searches[key] = (time.monotonic(), future)
-        return self._searches[key][1]
+
+    def cancel(self, futures: Collection[Future[list[str]]]) -> None:
+        """Cancel the searches that have not started yet.
+
+        Parameters
+        ----------
+        futures:
+            The values, from :meth:`submit`.
+        """
+        with self._lock:
+            for key, (_, future) in list(self._searches.items()):
+                if future in futures and future.cancel():
+                    del self._searches[key]
 
     def _remove_expired(self) -> None:
-        """Forget the searches that have finished too long ago."""
+        """Forget the searches that have finished too long ago.
+
+        Only call this while holding the lock.
+        """
         now = time.monotonic()
         for key, (start, future) in list(self._searches.items()):
             max_age = (
@@ -180,5 +220,6 @@ class FacetSearch:
         failures = esgf.failures()
         values = _search(sources, project, facets, facet)
         if esgf.failures() != failures:
-            self._incomplete.add(key)
+            with self._lock:
+                self._incomplete.add(key)
         return values
