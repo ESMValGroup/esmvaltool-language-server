@@ -86,12 +86,11 @@ def _search(
         try:
             return source.facet_values(project, facets, facet)
         except Exception:
+            name = getattr(source, "__name__", source)
             logger.exception(
-                "Failed to get the values of %s from %s",
-                facet,
-                getattr(source, "__name__", source),
+                "Failed to get the values of %s from %s", facet, name
             )
-            esgf.record_failure(source)
+            esgf.record_failure(name, "failed with an unexpected error")
             return []
 
     with ThreadPoolExecutor(max_workers=len(sources)) as pool:
@@ -108,11 +107,9 @@ def _search_datasets(
         try:
             return source.datasets(project, facets, fields)
         except Exception:
-            logger.exception(
-                "Failed to find the datasets in %s",
-                getattr(source, "__name__", source),
-            )
-            esgf.record_failure(source)
+            name = getattr(source, "__name__", source)
+            logger.exception("Failed to find the datasets in %s", name)
+            esgf.record_failure(name, "failed with an unexpected error")
             return []
 
     with ThreadPoolExecutor(max_workers=len(sources)) as pool:
@@ -163,8 +160,11 @@ class FacetSearch:
     ) -> None:
         self.max_age = max_age
         self.retry_age = retry_age
-        # The searches for which a source could not be searched.
-        self._incomplete: weakref.WeakSet[Future[Any]] = weakref.WeakSet()
+        # The problems of the searches for which a source could not be
+        # searched.
+        self._problems: weakref.WeakKeyDictionary[Future[Any], list[str]] = (
+            weakref.WeakKeyDictionary()
+        )
         self._executor = ThreadPoolExecutor(
             max_workers=4,
             thread_name_prefix="facet-search",
@@ -347,7 +347,24 @@ class FacetSearch:
             False if a source could not be searched, so values may be missing.
         """
         with self._lock:
-            return future not in self._incomplete
+            return future not in self._problems
+
+    def problems(self, future: Future[Any]) -> list[str]:
+        """Describe why sources of the values could not be searched.
+
+        Parameters
+        ----------
+        future:
+            The values, from :meth:`submit` or :meth:`submit_datasets`.
+
+        Returns
+        -------
+        :
+            The problems, e.g. ``SolrESGFIndex('esgf-node.ornl.gov') could
+            not be reached``. Empty if all sources could be searched.
+        """
+        with self._lock:
+            return list(self._problems.get(future, []))
 
     def cancel(
         self,
@@ -387,7 +404,7 @@ class FacetSearch:
         for key, search in list(self._searches.items()):
             max_age = (
                 self.retry_age
-                if search.future in self._incomplete
+                if search.future in self._problems
                 else self.max_age
             )
             if now - search.start >= max_age and search.future.done():
@@ -397,9 +414,9 @@ class FacetSearch:
         """Search and remember if a source could not be searched."""
         failures = esgf.failures()
         values = search.run()
-        if esgf.failures() != failures:
+        if problems := esgf.failures_since(failures):
             with self._lock:
-                self._incomplete.add(search.future)
+                self._problems[search.future] = problems
         return values
 
 
@@ -435,6 +452,10 @@ class BackgroundSearch:
     def is_complete(self, future: Future[Any]) -> bool:
         """Check that all sources could be searched."""
         return self._search.is_complete(future)
+
+    def problems(self, future: Future[Any]) -> list[str]:
+        """Describe why sources could not be searched."""
+        return self._search.problems(future)
 
     def cancel(self, futures: Collection[Future[Any]]) -> None:
         """Cancel the searches that have not started yet."""

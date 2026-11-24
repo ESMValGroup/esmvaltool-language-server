@@ -370,6 +370,9 @@ def test_unreachable_index_is_skipped(
     assert esgf._index_ranges(index, {}, "experiment") == []
     assert session.attempts == 1
     assert esgf.failures() == failures + 2
+    assert esgf.failures_since(failures) == [
+        "SolrESGFIndex('node') could not be reached",
+    ]
     # The index is asked again once the time has passed.
     retry_at[index] = esgf.time.monotonic()
     assert esgf._index_values(index, {}, "model") == {}
@@ -405,9 +408,14 @@ def test_index_values_error(caplog: pytest.LogCaptureFixture) -> None:
         distrib=False,
         repr="SolrESGFIndex('node')",
     )
+    failures = esgf.failures()
     with caplog.at_level(logging.WARNING):
         assert esgf._index_values(index, {}, "model") == {}
     assert "Failed to get the values of model" in caplog.text
+    [problem] = esgf.failures_since(failures)
+    assert problem.startswith(
+        "SolrESGFIndex('node') failed to give the values of model: ",
+    )
 
 
 @pytest.fixture
@@ -1189,6 +1197,9 @@ def test_shared_copies_that_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     failures = esgf.failures()
     assert esgf._shared_copies(index, esgf._Mapping({}, {}), query) == []
     assert esgf.failures() == failures + 1
+    assert esgf.failures_since(failures) == [
+        "SolrESGFIndex('node') failed to give the datasets",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1315,6 +1326,11 @@ def test_too_many_records(
         assert len(esgf._globus_records(index, [])) == 2
     assert "Only read the first 2 of 5 records" in caplog.text
     assert esgf.failures() == failures + 1
+    [problem] = esgf.failures_since(failures)
+    assert problem == (
+        "GlobusESGFIndex('globus') found more records than the 2 that were "
+        "read"
+    )
 
 
 class _SolrPages:
@@ -1442,6 +1458,8 @@ def test_too_many_stac_items(
     assert len(items) == 1
     assert "Only read the first 1 of 2 datasets" in caplog.text
     assert esgf.failures() == failures + 1
+    [problem] = esgf.failures_since(failures)
+    assert problem.endswith("found more datasets than the 1 that were read")
 
 
 def test_globus_files(monkeypatch: pytest.MonkeyPatch) -> None:

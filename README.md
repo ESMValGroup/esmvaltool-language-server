@@ -129,14 +129,16 @@ authors and references it defines.
   Datasets with anchors, aliases, or `<<` are not replaced.
   The new datasets are written in the style of the dataset with glob
   patterns, `{...}` or one facet per line.
-  This can take a minute if there are many datasets; the progress shows what
-  is being searched, and the search can be cancelled.
+  This can take a minute if there are many datasets; the progress shows the
+  dataset with glob patterns and the variable groups that are being searched
+  for, and the search can be cancelled.
   Starting the search again while it runs does nothing, unless the recipe
   changed: then the running search stops and a new one starts, which uses
   what the running search has found.
   Datasets without data are kept, and a warning lists them.
   A warning is also shown if some sources of data could not be searched, so
-  datasets may be missing.
+  datasets may be missing, with the reason for each source, e.g. that an
+  index could not be reached or found more datasets than were read.
 
 Other tools also use files named like recipes, for example `recipe.yaml` of
 conda-forge.

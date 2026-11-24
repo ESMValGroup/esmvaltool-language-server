@@ -690,12 +690,13 @@ def _report(ls: RecipeLanguageServer, populated: Populated) -> None:
             + ", ".join(populated.missing)
             + ", so these datasets were not replaced.",
         )
-    if not populated.complete:
+    if populated.problems:
         _show_message(
             ls,
             types.MessageType.Warning,
-            "Some sources of data could not be searched, so datasets may be "
-            "missing. Refer to the output of the language server for details.",
+            "Some datasets may be missing, because "
+            + "; ".join(populated.problems)
+            + ". Refer to the output of the language server for details.",
         )
 
 

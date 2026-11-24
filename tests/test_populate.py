@@ -112,8 +112,8 @@ class _Search:
     ) -> Future[_Rows] | None:
         return self.find(project, facets, fields)
 
-    def is_complete(self, _: Future[_Rows]) -> bool:
-        return self.complete
+    def problems(self, _: Future[_Rows]) -> list[str]:
+        return [] if self.complete else ["index could not be reached"]
 
     def cancel(self, futures: Collection[Future[_Rows]]) -> None:
         self.cancelled.extend(futures)
@@ -481,6 +481,7 @@ def test_populate_incomplete() -> None:
     )
     assert populated.edits
     assert not populated.complete
+    assert populated.problems == ["index could not be reached"]
 
 
 def test_populate_reports_progress() -> None:
@@ -494,8 +495,20 @@ def test_populate_reports_progress() -> None:
     assert populated.complete
     # Two entries with patterns, searched for two variable groups.
     assert reported == [
-        ("Searching for datasets: 0 of 2", 0),
-        ("Searching for datasets: 0 of 2", 50),
+        (
+            (
+                "1 of 2, {dataset: '*', project: CMIP6, exp: historical, "
+                "ensemble: r*i1p1f1}: searching for pr, tas"
+            ),
+            0,
+        ),
+        (
+            (
+                "2 of 2, {dataset: UK*, project: CMIP6, ensemble: '*'}: "
+                "searching for pr, tas"
+            ),
+            50,
+        ),
     ]
 
 

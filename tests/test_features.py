@@ -781,8 +781,8 @@ class _DatasetSearch:
         )
         return future
 
-    def is_complete(self, _: Future[list[tuple[str, ...]]]) -> bool:
-        return True
+    def problems(self, _: Future[list[tuple[str, ...]]]) -> list[str]:
+        return []
 
     def cancel(self, _: object) -> None:
         pass

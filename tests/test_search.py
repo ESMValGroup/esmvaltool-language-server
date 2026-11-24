@@ -162,7 +162,7 @@ def test_facet_search_retries_after_failure_of_index(
 ) -> None:
     def facet_values(*_: object) -> list[str]:
         # An index failed, but the others found values.
-        esgf.record_failure("index")
+        esgf.record_failure("index", "could not be reached")
         return ["A"]
 
     monkeypatch.setattr(source, "facet_values", facet_values)
@@ -188,6 +188,7 @@ def test_facet_search_is_complete(source: _Source) -> None:
     assert complete is not None
     complete.result()
     assert facet_search.is_complete(complete)
+    assert facet_search.problems(complete) == []
     source.values = []
     incomplete = facet_search.submit("CMIP6", {"exp": "historical"}, "dataset")
     assert incomplete is not None
@@ -262,6 +263,7 @@ def test_facet_search_for_completion_does_not_wait(
     release.set()
     assert busy.result(TIMEOUT) == [("A",)]
     assert background.is_complete(busy)
+    assert background.problems(busy) == []
     background.cancel([busy])
     assert (
         facet_search.submit_datasets("CMIP6", {"exp": "a"}, ("dataset",))
@@ -393,3 +395,5 @@ def test_dataset_search_error(
         assert future.result(TIMEOUT) == []
     assert "Failed to find the datasets in" in caplog.text
     assert not facet_search.is_complete(future)
+    [problem] = facet_search.problems(future)
+    assert problem.endswith("failed with an unexpected error")

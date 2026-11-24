@@ -90,8 +90,10 @@ _UNREACHABLE = (
 # When to ask an index again that could not be reached, by index.
 _RETRY_AT: dict[Index, float] = {}
 
-# The number of requests that failed, by source of the data.
-_FAILURES: Counter[str] = Counter()
+# The problems of the requests that failed, with the number of requests that
+# had failed when each problem was last seen.
+_FAILURES: dict[str, int] = {}
+_FAILURES_LOCK = threading.Lock()
 
 # The prefix that ESMValCore adds to the version of a dataset on ESGF.
 _VERSION_PREFIX = "v"
@@ -159,15 +161,22 @@ class _Mapping:
         return value
 
 
-def record_failure(source: object) -> None:
+def record_failure(source: object, reason: str) -> None:
     """Remember that a search of a source of data failed.
 
     Parameters
     ----------
     source:
         The source of the data.
+    reason:
+        Why the search failed, for the user, e.g. ``could not be reached``.
     """
-    _FAILURES[str(source)] += 1
+    with _FAILURES_LOCK:
+        _FAILURES[f"{source} {reason}"] = _failed() + 1
+
+
+def _failed() -> int:
+    return max(_FAILURES.values(), default=0)
 
 
 def failures() -> int:
@@ -182,7 +191,26 @@ def failures() -> int:
     :
         The number of failed searches.
     """
-    return _FAILURES.total()
+    with _FAILURES_LOCK:
+        return _failed()
+
+
+def failures_since(count: int) -> list[str]:
+    """Describe the failed searches since a number of failed searches.
+
+    Parameters
+    ----------
+    count:
+        The number of failed searches, from :func:`failures`.
+
+    Returns
+    -------
+    :
+        The problems, e.g. ``SolrESGFIndex('esgf-node.ornl.gov') could not
+        be reached``, sorted.
+    """
+    with _FAILURES_LOCK:
+        return sorted(p for p, last in _FAILURES.items() if last > count)
 
 
 @functools.cache
@@ -545,7 +573,10 @@ def _stac_item_values(
             len(items),
             index,
         )
-        record_failure(index)
+        record_failure(
+            index,
+            f"found more datasets than the {len(items)} that were read",
+        )
     values = (item.get("properties", {}).get(name) for item in items)
     return Counter(str(v) for v in values if v is not None)
 
@@ -556,7 +587,7 @@ def _ask[T](index: Index, what: str, ask: Callable[[], T], default: T) -> T:
     The default is returned if the index cannot be asked or fails to answer.
     """
     if time.monotonic() < _RETRY_AT.get(index, 0):
-        record_failure(index)
+        record_failure(index, "could not be reached")
         return default
     try:
         return ask()
@@ -565,9 +596,10 @@ def _ask[T](index: Index, what: str, ask: Callable[[], T], default: T) -> T:
         logger.warning(
             "Not asking %s for %s seconds: %s", index, RETRY_AFTER, exc
         )
+        record_failure(index, "could not be reached")
     except _ERRORS as exc:
         logger.warning("Failed to get %s from %s: %s", what, index, exc)
-    record_failure(index)
+        record_failure(index, f"failed to give {what}: {exc}")
     return default
 
 
@@ -994,7 +1026,7 @@ def _shared_copies(
     copies = future.result()
     if copies is None:
         if not owner:
-            record_failure(index)
+            record_failure(index, "failed to give the datasets")
         return []
     return copies
 
@@ -1160,7 +1192,10 @@ def _pages(
             what,
             index,
         )
-        record_failure(index)
+        record_failure(
+            index,
+            f"found more {what} than the {len(records)} that were read",
+        )
     return records
 
 
@@ -1301,7 +1336,10 @@ def _stac_search(
             total,
             index,
         )
-        record_failure(index)
+        record_failure(
+            index,
+            f"found more datasets than the {len(items)} that were read",
+        )
     return items
 
 

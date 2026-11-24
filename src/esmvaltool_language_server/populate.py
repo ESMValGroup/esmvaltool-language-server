@@ -55,8 +55,8 @@ class Search(Protocol):
     ) -> Future[_Rows] | None:
         """Start finding the values of facets of the datasets of a project."""
 
-    def is_complete(self, future: Future[_Rows]) -> bool:
-        """Check that all sources of the values could be searched."""
+    def problems(self, future: Future[_Rows]) -> list[str]:
+        """Describe why sources of the values could not be searched."""
 
     def cancel(self, futures: Collection[Future[_Rows]]) -> None:
         """Cancel the searches that have not started yet."""
@@ -86,11 +86,16 @@ class Populated:
 
     edits: list[types.TextEdit]
     """The edits, with positions that count characters."""
-    complete: bool
-    """Whether all sources of data could be searched, so no dataset is
+    problems: list[str] = dataclasses.field(default_factory=list)
+    """Why sources of data could not be searched, so datasets may be
     missing."""
     missing: list[str] = dataclasses.field(default_factory=list)
     """The datasets that were not replaced because no data was found."""
+
+    @property
+    def complete(self) -> bool:
+        """Whether all sources of data could be searched."""
+        return not self.problems
 
 
 # A glob pattern, as in :mod:`esmvalcore.dataset`.
@@ -193,9 +198,9 @@ def _nodes(
     return None if key is None or node is None else (key, node)
 
 
-def _groups(recipe: object, path: Path) -> list[dict[object, object]]:
+def _groups(recipe: object, path: Path) -> dict[str, dict[object, object]]:
     """Get the facets of the variable groups that use a list of datasets."""
-    groups = []
+    groups = {}
     diagnostics = data_at(recipe, ("diagnostics",))
     for diagnostic in diagnostics if isinstance(diagnostics, dict) else {}:
         variables = data_at(recipe, ("diagnostics", diagnostic, "variables"))
@@ -204,7 +209,7 @@ def _groups(recipe: object, path: Path) -> list[dict[object, object]]:
             if group_path[: len(path) - 1] == path[:-1]:
                 facets = data_at(recipe, group_path)
                 facets = facets if isinstance(facets, dict) else {}
-                groups.append({"short_name": group, **facets})
+                groups[str(group)] = {"short_name": group, **facets}
     return groups
 
 
@@ -289,25 +294,36 @@ class _Searcher:
     steps: int
     """The number of datasets with glob patterns to search for."""
     step: int = 0
-    complete: bool = True
+    problems: set[str] = dataclasses.field(default_factory=set)
 
-    def wait_for(self, futures: Collection[Future[_Rows]]) -> None:
-        """Wait for the searches for the datasets of an entry."""
+    def wait_for(
+        self,
+        entry: dict[object, object],
+        futures: Mapping[Future[_Rows], set[str]],
+    ) -> None:
+        """Wait for the searches of the variable groups for an entry."""
         pending = set(futures)
         total = len(pending)
+        what = _text(entry, flow=True)
+        if self.steps > 1:
+            what = f"{self.step + 1} of {self.steps}, {what}"
         while pending:
             if self.progress.cancelled():
                 self.search.cancel(pending)
                 raise SearchCancelledError
+            groups = ", ".join(
+                sorted(set().union(*(futures[f] for f in pending)))
+            )
             self.progress.report(
-                f"Searching for datasets: {total - len(pending)} of {total}",
+                f"{what}: searching for {groups}",
                 int(100 * (self.step + 1 - len(pending) / total) / self.steps),
             )
             _, pending = wait(
                 pending, timeout=0.2, return_when=FIRST_COMPLETED
             )
         self.step += 1
-        self.complete &= all(map(self.search.is_complete, futures))
+        for future in futures:
+            self.problems.update(self.search.problems(future))
 
 
 # The searches for the data that a dataset needs: all of the outer lists,
@@ -330,7 +346,7 @@ def _found(futures: _Futures) -> _Rows:
 
 def _expand(
     searcher: _Searcher,
-    groups: list[dict[object, object]],
+    groups: dict[str, dict[object, object]],
     entry: dict[object, object],
 ) -> list[dict[object, object]]:
     """Replace the glob patterns of a dataset by the values with data.
@@ -341,12 +357,20 @@ def _expand(
     """
     patterns = _patterns(entry)
     fields = tuple(str(facet) for facet, _ in patterns)
-    futures: _Futures = [
-        [[_submit(searcher.search, f, fields) for f in alt] for alt in need]
-        for group in groups
-        for need in _needs(group, entry)
-    ]
-    searcher.wait_for([f for n in futures for alt in n for f in alt])
+    futures: _Futures = []
+    # The variable groups that wait for each search.
+    names: dict[Future[_Rows], set[str]] = {}
+    for name, group in groups.items():
+        for need in _needs(group, entry):
+            futures.append(
+                [
+                    [_submit(searcher.search, f, fields) for f in a]
+                    for a in need
+                ]
+            )
+            for future in (f for alt in futures[-1] for f in alt):
+                names.setdefault(future, set()).add(name)
+    searcher.wait_for(entry, names)
     return [
         {**entry, **dict(zip(fields, row, strict=True))}
         for row in _found(futures)
@@ -546,4 +570,8 @@ def populate_edits(
             )
         else:
             missing.append(_text(entry, flow=True))
-    return Populated(edits, complete=searcher.complete, missing=missing)
+    return Populated(
+        edits,
+        problems=sorted(searcher.problems),
+        missing=missing,
+    )

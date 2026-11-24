@@ -311,8 +311,8 @@ class _DatasetSearch:
         future.set_result([("CESM2",)])
         return future
 
-    def is_complete(self, _: Future[_Rows]) -> bool:
-        return self.complete
+    def problems(self, _: Future[_Rows]) -> list[str]:
+        return [] if self.complete else ["index could not be reached"]
 
     def cancel(self, _: object) -> None:
         pass
@@ -397,6 +397,7 @@ async def test_populate_datasets_incomplete() -> None:
     [message] = ls.messages
     assert message.type == types.MessageType.Warning
     assert "datasets may be missing" in message.message
+    assert "index could not be reached" in message.message
 
 
 @pytest.mark.asyncio
