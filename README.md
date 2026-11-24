@@ -100,13 +100,29 @@ authors and references it defines.
   by the datasets that have data for every variable group that uses them,
   with a code lens above `datasets` or `additional_datasets`, or a code
   action on that line in editors without code lenses.
-  The datasets are found in the same way as the values for completion.
+  The datasets are found in the local data and on the ESGF indices that are
+  used for completion, with one search for each variable group that asks
+  each index for all the matching datasets at once.
   Ranges of ensemble members such as `r(1:10)i1p1f1` and lists of
   experiments such as `[historical, ssp585]`, which ESMValCore
   concatenates, are kept only for the datasets with data for every member
   and experiment.
   Lists of other facets, such as `activity: [CMIP, ScenarioMIP]`, match data
   for any of their values.
+  If a variable group selects years with `timerange`, `start_year`, or
+  `end_year`, only datasets with data for each year are kept, from any of
+  the experiments of a list.
+  The years are read from the names of the files, as ESMValCore does.
+  On ESGF, the STAC indices list the files of each dataset, and the Solr and
+  Globus indices know the first and last date of each dataset.
+  Because these dates are wrong for some datasets, for example of some
+  models with a 360-day calendar, and the Solr indices may only have some of
+  the files of a dataset, the names of the files of a dataset whose dates do
+  not cover the years are asked for, and the dataset is only left out if
+  these show that it has no data for some of the years.
+  Datasets whose files cannot be found are kept; `esmvaltool run` reports
+  the years without data.
+  Time ranges with `*` or durations, such as `1990/P10Y`, are not checked.
   As in ESMValCore, a variable with `derive: true` is found if there is data
   for the variable itself, or else for all the variables that it is derived
   from; with `force_derivation: true`, only the latter.

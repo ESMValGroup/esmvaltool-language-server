@@ -137,3 +137,93 @@ def test_time_ranges_are_split_at_missing_years() -> None:
         ("199001", "199112"),
         ("199501", "199612"),
     ]
+
+
+@pytest.mark.usefixtures("local_data")
+@pytest.mark.parametrize(
+    ("facets", "expected"),
+    [
+        ({"short_name": "pr"}, [("ERA5", "v2"), ("MSWEP", "v1")]),
+        ({"short_name": "pr", "timerange": "1990/1993"}, [("MSWEP", "v1")]),
+        (
+            {"short_name": "pr", "start_year": 1991},
+            [("ERA5", "v2"), ("MSWEP", "v1")],
+        ),
+        ({"short_name": "ua"}, []),
+    ],
+)
+def test_datasets(
+    facets: dict[object, object],
+    expected: list[tuple[str, ...]],
+) -> None:
+    assert files.datasets("OBS6", facets, ("dataset", "version")) == expected
+
+
+@pytest.mark.usefixtures("local_data")
+def test_datasets_not_searchable() -> None:
+    facets = {"short_name": "pr"}
+    assert files.datasets("OBS6", facets, ("dataset", "exp")) == []
+    assert files.datasets("CMIP6", facets, ("dataset",)) == []
+
+
+# The model, experiment, and dates of the files of CMIP6. Data of NorESM2-LM
+# is missing for 2013 and 2014.
+CMIP6_FILES = (
+    ("CESM2", "historical", "185001-201412"),
+    ("CESM2", "ssp585", "201501-210012"),
+    ("MIROC6", "historical", "185001-201412"),
+    ("NorESM2-LM", "historical", "185001-201212"),
+    ("NorESM2-LM", "ssp585", "201501-210012"),
+)
+
+
+@pytest.fixture
+def cmip6_data(tmp_path: Path) -> Iterator[None]:
+    for model, exp, dates in CMIP6_FILES:
+        name = f"tas_Amon_{model}_{exp}_r1i1p1f1_gn_{dates}.nc"
+        path = tmp_path / model / exp / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    data = {
+        "local": {
+            "type": "esmvalcore.io.local.LocalDataSource",
+            "rootpath": str(tmp_path),
+            "dirname_template": "{dataset}/{exp}",
+            "filename_template": (
+                "{short_name}_{mip}_{dataset}_{exp}_{ensemble}_{grid}*.nc"
+            ),
+        },
+    }
+    projects = {
+        **CFG["projects"],
+        "CMIP6": {**CFG["projects"]["CMIP6"], "data": data},
+    }
+    _clear_caches()
+    with CFG.context(projects=projects):
+        yield
+    _clear_caches()
+
+
+@pytest.mark.usefixtures("cmip6_data")
+@pytest.mark.parametrize(
+    ("facets", "expected"),
+    [
+        ({"exp": "historical"}, ["CESM2", "MIROC6", "NorESM2-LM"]),
+        # Each experiment of a list is needed.
+        ({"exp": ["historical", "ssp585"]}, ["CESM2", "NorESM2-LM"]),
+        (
+            {"exp": ["historical", "ssp585"], "timerange": "1990/2050"},
+            ["CESM2"],
+        ),
+    ],
+)
+def test_datasets_of_experiments(
+    facets: dict[object, object],
+    expected: list[str],
+) -> None:
+    found = files.datasets(
+        "CMIP6",
+        {"short_name": "tas", "mip": "Amon", **facets},
+        ("dataset",),
+    )
+    assert found == [(name,) for name in expected]

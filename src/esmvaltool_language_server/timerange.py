@@ -7,7 +7,7 @@ import datetime as dt
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
 FACETS = frozenset({"timerange", "start_year", "end_year"})
 """Facets that select the time range of the data."""
@@ -202,3 +202,56 @@ def overlap(facet: str, suggested: Iterable[Iterable[str]]) -> list[str]:
             }
         )
     return suggestions(facet, common or [])
+
+
+def selected_years(facets: Mapping[object, object]) -> tuple[int, int] | None:
+    """Get the years that the time facets of a dataset select.
+
+    Like ESMValCore, ``start_year`` and ``end_year`` select the years from
+    one to the other, or a single year if only one of them is given.
+
+    Parameters
+    ----------
+    facets:
+        The facets of the dataset.
+
+    Returns
+    -------
+    :
+        The first and last year. ``None`` if no years are selected, or if the
+        time range has a wildcard or a duration, e.g. ``1990/P10Y``, which
+        ESMValCore resolves when it finds the data.
+    """
+    if "timerange" in facets:
+        start, _, end = str(facets["timerange"]).partition("/")
+    else:
+        start = str(facets.get("start_year", facets.get("end_year", "")))
+        end = str(facets.get("end_year", start))
+    first, last = (d and _year(d.zfill(_YEAR_DIGITS)) for d in (start, end))
+    if not (first and last):
+        return None
+    return int(first), int(last)
+
+
+def covers(years: tuple[int, int], ranges: Iterable[tuple[str, str]]) -> bool:
+    """Check if there is data for each of the years.
+
+    Parameters
+    ----------
+    years:
+        The first and last year.
+    ranges:
+        The first and last date of each file, in the format of the dates in
+        file names, e.g. ``185001``.
+
+    Returns
+    -------
+    :
+        Whether the files have data for each year, as checked by ESMValCore.
+    """
+    available: set[int] = set()
+    for start, end in ranges:
+        first, last = _year(start), _year(end)
+        if first and last:
+            available.update(range(int(first), int(last) + 1))
+    return set(range(years[0], years[1] + 1)) <= available

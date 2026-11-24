@@ -768,18 +768,20 @@ class _DatasetSearch:
 
     DATA: ClassVar = {"tas": ["CESM2", "MIROC6"], "pr": ["CESM2"]}
 
-    def submit(
+    def submit_datasets(
         self,
         _: str,
         facets: Mapping[object, object],
-        facet: str,
-    ) -> Future[list[str]]:
-        assert facet == "dataset"
-        future: Future[list[str]] = Future()
-        future.set_result(self.DATA[str(facets["short_name"])])
+        fields: tuple[str, ...],
+    ) -> Future[list[tuple[str, ...]]]:
+        assert fields == ("dataset",)
+        future: Future[list[tuple[str, ...]]] = Future()
+        future.set_result(
+            [(name,) for name in self.DATA[str(facets["short_name"])]],
+        )
         return future
 
-    def is_complete(self, _: Future[list[str]]) -> bool:
+    def is_complete(self, _: Future[list[tuple[str, ...]]]) -> bool:
         return True
 
     def cancel(self, _: object) -> None:

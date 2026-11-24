@@ -293,6 +293,10 @@ class _PopulateServer(server.RecipeLanguageServer):
         self.messages.append(params)
 
 
+# The values of the facets with glob patterns of each dataset.
+_Rows = list[tuple[str, ...]]
+
+
 class _DatasetSearch:
     """Find CESM2 for any search."""
 
@@ -302,12 +306,12 @@ class _DatasetSearch:
     def background(self) -> _DatasetSearch:
         return self
 
-    def submit(self, *_: object) -> Future[list[str]]:
-        future: Future[list[str]] = Future()
-        future.set_result(["CESM2"])
+    def submit_datasets(self, *_: object) -> Future[_Rows]:
+        future: Future[_Rows] = Future()
+        future.set_result([("CESM2",)])
         return future
 
-    def is_complete(self, _: Future[list[str]]) -> bool:
+    def is_complete(self, _: Future[_Rows]) -> bool:
         return self.complete
 
     def cancel(self, _: object) -> None:
@@ -455,12 +459,12 @@ async def test_populate_datasets_without_data(
     ls = _PopulateServer(POPULATE_RECIPE)
     search = _DatasetSearch()
 
-    def submit(*_: object) -> Future[list[str]]:
-        future: Future[list[str]] = Future()
+    def submit(*_: object) -> Future[_Rows]:
+        future: Future[_Rows] = Future()
         future.set_result([])
         return future
 
-    monkeypatch.setattr(search, "submit", submit)
+    monkeypatch.setattr(search, "submit_datasets", submit)
     ls.facet_search = search  # type: ignore[assignment]
     await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
     assert not ls.edits
@@ -478,10 +482,10 @@ async def test_populate_datasets_unexpected_error(
     ls = _PopulateServer(POPULATE_RECIPE)
     search = _DatasetSearch()
 
-    def submit(*_: object) -> Future[list[str]]:
+    def submit(*_: object) -> Future[_Rows]:
         raise RuntimeError
 
-    monkeypatch.setattr(search, "submit", submit)
+    monkeypatch.setattr(search, "submit_datasets", submit)
     ls.facet_search = search  # type: ignore[assignment]
     await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
     assert not ls.edits
@@ -500,11 +504,11 @@ async def test_populate_datasets_request_cancelled(
     submitted = threading.Event()
     stopped = threading.Event()
 
-    def submit(*_: object) -> Future[list[str]]:
+    def submit(*_: object) -> Future[_Rows]:
         submitted.set()
         return Future()
 
-    monkeypatch.setattr(search, "submit", submit)
+    monkeypatch.setattr(search, "submit_datasets", submit)
     monkeypatch.setattr(search, "cancel", lambda _: stopped.set())
     ls.facet_search = search  # type: ignore[assignment]
     task = asyncio.create_task(
@@ -536,13 +540,13 @@ async def test_populate_datasets_changed_during_search(
 ) -> None:
     ls = _PopulateServer(POPULATE_RECIPE)
     search = _DatasetSearch()
-    submit = search.submit
+    submit = search.submit_datasets
 
-    def change(*args: object) -> Future[list[str]]:
+    def change(*args: object) -> Future[_Rows]:
         _change(ls, POPULATE_RECIPE + "# A comment.\n", 4)
         return submit(*args)
 
-    monkeypatch.setattr(search, "submit", change)
+    monkeypatch.setattr(search, "submit_datasets", change)
     ls.facet_search = search  # type: ignore[assignment]
     await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
     assert not ls.edits
@@ -556,15 +560,15 @@ async def test_populate_datasets_again(
 ) -> None:
     ls = _PopulateServer(POPULATE_RECIPE)
     search = _DatasetSearch()
-    submit = search.submit
+    submit = search.submit_datasets
     submitted = threading.Event()
-    pending: Future[list[str]] = Future()
+    pending: Future[_Rows] = Future()
 
-    def first(*_: object) -> Future[list[str]]:
+    def first(*_: object) -> Future[_Rows]:
         submitted.set()
         return pending
 
-    monkeypatch.setattr(search, "submit", first)
+    monkeypatch.setattr(search, "submit_datasets", first)
     ls.facet_search = search  # type: ignore[assignment]
     uri = "file:///recipe_test.yml"
     running = asyncio.create_task(
@@ -577,7 +581,7 @@ async def test_populate_datasets_again(
     assert message.type == types.MessageType.Info
     assert "already" in message.message
     # The recipe changed, so the running search is stopped.
-    monkeypatch.setattr(search, "submit", submit)
+    monkeypatch.setattr(search, "submit_datasets", submit)
     _change(ls, POPULATE_RECIPE.replace("CMIP6", "CMIP5"), 4)
     await asyncio.wait_for(
         server.populate_datasets(ls, uri, ["datasets"]),
@@ -622,13 +626,13 @@ async def test_populate_datasets_reports_progress(
     ls, reported = _progress_server(monkeypatch, POPULATE_RECIPE)
     search = _DatasetSearch()
 
-    def submit(*_: object) -> Future[list[str]]:
+    def submit(*_: object) -> Future[_Rows]:
         # Find the values after a while, so the progress is reported.
-        future: Future[list[str]] = Future()
-        threading.Timer(0.5, future.set_result, [["CESM2"]]).start()
+        future: Future[_Rows] = Future()
+        threading.Timer(0.5, future.set_result, [[("CESM2",)]]).start()
         return future
 
-    monkeypatch.setattr(search, "submit", submit)
+    monkeypatch.setattr(search, "submit_datasets", submit)
     ls.facet_search = search  # type: ignore[assignment]
     await server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"])
     begin, *reports, end = reported
@@ -663,15 +667,15 @@ async def test_populate_datasets_cancelled(
 ) -> None:
     ls, reported = _progress_server(monkeypatch, POPULATE_RECIPE)
     search = _DatasetSearch()
-    pending: Future[list[str]] = Future()
+    pending: Future[_Rows] = Future()
 
-    def submit(*_: object) -> Future[list[str]]:
+    def submit(*_: object) -> Future[_Rows]:
         # The editor cancels the progress during the search.
         [cancel] = ls.work_done_progress.tokens.values()
         cancel.cancel()
         return pending
 
-    monkeypatch.setattr(search, "submit", submit)
+    monkeypatch.setattr(search, "submit_datasets", submit)
     ls.facet_search = search  # type: ignore[assignment]
     await asyncio.wait_for(
         server.populate_datasets(ls, "file:///recipe_test.yml", ["datasets"]),

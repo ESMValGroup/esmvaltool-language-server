@@ -53,30 +53,38 @@ RECIPE = dedent("""\
     """)
 
 
+# The values of the facets with glob patterns of each dataset.
+_Rows = list[tuple[str, ...]]
+
+
 def _find(
     project: str,
     facets: Mapping[object, object],
-    facet: str,
-) -> Future[list[str]] | None:
-    """Find the datasets or ensemble members with data."""
+    fields: tuple[str, ...],
+) -> Future[_Rows] | None:
+    """Find the datasets and ensemble members with data."""
     assert project == "CMIP6"
-    datasets = DATA[str(facets["short_name"])]
-    future: Future[list[str]] = Future()
-    ensemble = facets.get("ensemble")
-    if facet == "dataset":
-        future.set_result(
-            sorted(
-                name
-                for name, ensembles in datasets.items()
-                if ensemble is None
-                or "*" in str(ensemble)
-                or ensemble in ensembles
-            ),
-        )
-    elif facet == "ensemble":
-        future.set_result(datasets.get(str(facets["dataset"]), []))
-    else:
+    if not set(fields) <= {"dataset", "ensemble"}:
         return None
+    found = [
+        {"dataset": name, "ensemble": member}
+        for name, members in DATA[str(facets["short_name"])].items()
+        for member in members
+    ]
+    future: Future[_Rows] = Future()
+    future.set_result(
+        sorted(
+            {
+                tuple(dataset[f] for f in fields)
+                for dataset in found
+                if all(
+                    facets.get(k, v) == v
+                    for k, v in dataset.items()
+                    if k not in fields
+                )
+            },
+        ),
+    )
     return future
 
 
@@ -86,28 +94,28 @@ class _Search:
     def __init__(
         self,
         find: Callable[
-            [str, Mapping[object, object], str],
-            Future[list[str]] | None,
+            [str, Mapping[object, object], tuple[str, ...]],
+            Future[_Rows] | None,
         ] = _find,
         *,
         complete: bool = True,
     ) -> None:
         self.find = find
         self.complete = complete
-        self.cancelled: list[Future[list[str]]] = []
+        self.cancelled: list[Future[_Rows]] = []
 
-    def submit(
+    def submit_datasets(
         self,
         project: str,
         facets: Mapping[object, object],
-        facet: str,
-    ) -> Future[list[str]] | None:
-        return self.find(project, facets, facet)
+        fields: tuple[str, ...],
+    ) -> Future[_Rows] | None:
+        return self.find(project, facets, fields)
 
-    def is_complete(self, _: Future[list[str]]) -> bool:
+    def is_complete(self, _: Future[_Rows]) -> bool:
         return self.complete
 
-    def cancel(self, futures: Collection[Future[list[str]]]) -> None:
+    def cancel(self, futures: Collection[Future[_Rows]]) -> None:
         self.cancelled.extend(futures)
 
 
@@ -278,7 +286,7 @@ def test_populate_skips_entries_with_aliases(entry: str) -> None:
         ),
         (
             RECIPE.replace("ensemble: '*'", "grid: '*'"),
-            "Cannot search for the values of 'grid'",
+            "Cannot search for the values of 'dataset', 'grid'",
         ),
         (
             RECIPE.replace("project: CMIP6", "project: [CMIP6]"),
@@ -311,18 +319,8 @@ def test_time_range_patterns_are_kept() -> None:
               tas: {mip: Amon}
         """)
 
-    def search(
-        project: str,
-        facets: Mapping[object, object],
-        facet: str,
-    ) -> Future[list[str]] | None:
-        if facet == "timerange":
-            future: Future[list[str]] = Future()
-            future.set_result(["*", "1850/2014", "1990/2014"])
-            return future
-        return _find(project, facets, facet)
-
-    edits = _edits(text, search=_Search(search))
+    # The time range is not searched for.
+    edits = _edits(text)
 
     assert [edit.new_text for edit in edits] == [
         "{dataset: MIROC6, project: CMIP6, timerange: '*'}",
@@ -452,11 +450,13 @@ def test_populate_derived_variable(facets: str, expected: list[str]) -> None:
     def find(
         project: str,
         facets: Mapping[object, object],
-        facet: str,
-    ) -> Future[list[str]] | None:
-        assert facet == "dataset"
-        future: Future[list[str]] = Future()
-        future.set_result(sorted(data[str(facets["short_name"])]))
+        fields: tuple[str, ...],
+    ) -> Future[_Rows] | None:
+        assert fields == ("dataset",)
+        future: Future[_Rows] = Future()
+        future.set_result(
+            [(name,) for name in sorted(data[str(facets["short_name"])])],
+        )
         return future
 
     text = dedent(f"""\
@@ -492,17 +492,15 @@ def test_populate_reports_progress() -> None:
         Progress(report=lambda message, p: reported.append((message, p))),
     )
     assert populated.complete
-    # Two entries with two patterns each, searched for two variable groups.
+    # Two entries with patterns, searched for two variable groups.
     assert reported == [
-        ("Searching for 'dataset': 0 of 2", 0),
-        ("Searching for 'ensemble': 0 of 4", 25),
-        ("Searching for 'dataset': 0 of 2", 50),
-        ("Searching for 'ensemble': 0 of 2", 75),
+        ("Searching for datasets: 0 of 2", 0),
+        ("Searching for datasets: 0 of 2", 50),
     ]
 
 
 def test_populate_cancelled() -> None:
-    pending: Future[list[str]] = Future()
+    pending: Future[_Rows] = Future()
     search = _Search(lambda *_: pending)
     cancelled = iter([False, True])
     with pytest.raises(SearchCancelledError):
@@ -528,7 +526,8 @@ def test_populate_ensemble_list_with_range() -> None:
 
 
 def test_populate_experiments() -> None:
-    # Each experiment of a list is needed, but any of the activities.
+    # The sources find the datasets with data for each experiment of the
+    # list, and for any of the activities.
     data = {
         "historical": {"CESM2", "MIROC6"},
         "ssp585": {"CESM2", "UKESM1-0-LL"},
@@ -538,11 +537,14 @@ def test_populate_experiments() -> None:
     def find(
         project: str,
         facets: Mapping[object, object],
-        facet: str,
-    ) -> Future[list[str]] | None:
-        searched.append((facets["exp"], facets["activity"]))
-        future: Future[list[str]] = Future()
-        future.set_result(sorted(data[str(facets["exp"])]))
+        fields: tuple[str, ...],
+    ) -> Future[_Rows] | None:
+        experiments = facets["exp"]
+        assert isinstance(experiments, list)
+        searched.append((experiments, facets["activity"]))
+        future: Future[_Rows] = Future()
+        found = set.intersection(*(data[str(e)] for e in experiments))
+        future.set_result([(name,) for name in sorted(found)])
         return future
 
     text = dedent("""\
@@ -562,7 +564,7 @@ def test_populate_experiments() -> None:
         "    activity: [CMIP, ScenarioMIP]"
     )
     activities = ["CMIP", "ScenarioMIP"]
-    assert searched == [("historical", activities), ("ssp585", activities)]
+    assert searched == [(["historical", "ssp585"], activities)]
 
 
 @pytest.mark.parametrize("style", ["|", ">", "|+"])

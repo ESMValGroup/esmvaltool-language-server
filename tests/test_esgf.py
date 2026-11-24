@@ -961,3 +961,530 @@ def test_stac_values_from_too_many_items(stac_session: _Session) -> None:
     }
     # Other datasets may have other values.
     assert esgf.failures() == before + 1
+
+
+def test_stac_values_of_project_with_hyphen(stac_session: _Session) -> None:
+    base = "https://stac/collections"
+    stac_session.responses.update(
+        {
+            base: _Response({"collections": [{"id": "CORDEX-CMIP6"}]}),
+            f"{base}/CORDEX-CMIP6/queryables": _Response(
+                {"properties": {"cordex-cmip6:source_id": {}}},
+            ),
+            f"{base}/CORDEX-CMIP6/aggregations": _Response(
+                {
+                    "aggregations": [
+                        {"name": "cordex_cmip6_source_id_frequency"},
+                    ],
+                },
+            ),
+            f"{base}/CORDEX-CMIP6/aggregate": stac_session.responses[
+                f"{base}/CMIP6/aggregate"
+            ],
+        },
+    )
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    query = {"project": ["CORDEX-CMIP6"]}
+    assert esgf._stac_values(index, query, "source_id") == {"A": 4}
+    assert stac_session.params[-1]["aggregations"] == [
+        "cordex_cmip6_source_id_frequency",
+    ]
+
+
+def _copy(
+    index: esgf.Index,
+    dataset: str,
+    exp: str,
+    *dates: tuple[str, str],
+    from_files: bool = False,
+) -> esgf._Copy:
+    return esgf._Copy(
+        index=index,
+        id=f"{dataset}.{exp}",
+        values={"dataset": (dataset,), "exp": (exp,), "grid": ("gn", "gr")},
+        dates=dates,
+        from_files=from_files,
+    )
+
+
+@pytest.fixture
+def copies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[list[esgf.Index], list[list[str]]]:
+    """Use indices with copies of datasets, and remember the file searches.
+
+    The datasets on Solr and Globus have dates, those on STAC files.
+    """
+    solr, globus, stac = (
+        _index(SolrESGFIndex, repr="SolrESGFIndex('node')"),
+        _index(GlobusESGFIndex, repr="GlobusESGFIndex('globus')"),
+        _index(STACESGFIndex),
+    )
+    found = {
+        solr: [
+            _copy(solr, "A", "historical", ("1850", "2014")),
+            _copy(solr, "B", "historical", ("1850", "2014")),
+            # Wrong dates, but the files have data for each year.
+            _copy(solr, "C", "historical", ("1850", "2012")),
+            # The files show that data is missing.
+            _copy(solr, "D", "historical", ("1850", "2012")),
+            # The files cannot be found.
+            _copy(solr, "E", "historical", ("1850", "2012")),
+        ],
+        globus: [
+            _copy(globus, "E", "ssp585", ("2015", "2100")),
+        ],
+        stac: [
+            _copy(stac, "A", "ssp585", ("201501", "210012"), from_files=True),
+            _copy(stac, "C", "ssp585", ("201501", "210012"), from_files=True),
+            _copy(stac, "D", "ssp585", ("201501", "210012"), from_files=True),
+        ],
+    }
+    files = {
+        "C.historical": [("185001", "201412")],
+        "D.historical": [("185001", "201212")],
+    }
+    searched: list[list[str]] = []
+
+    def index_copies(
+        index: esgf.Index,
+        mapping: esgf._Mapping,
+        query: esgf.Query,
+    ) -> list[esgf._Copy]:
+        assert "project" in mapping.facets
+        assert query["experiment_id"] == ["historical", "ssp585"]
+        return found[index]
+
+    def index_files(
+        index: esgf.Index,
+        ids: list[str],
+    ) -> dict[str, list[tuple[str, str]]]:
+        searched.append(ids)
+        if isinstance(index, GlobusESGFIndex):
+            raise requests.ConnectionError
+        return {i: files[i] for i in ids if i in files}
+
+    monkeypatch.setattr(esgf, "_indices", lambda: [solr, globus, stac])
+    monkeypatch.setattr(esgf, "_index_copies", index_copies)
+    monkeypatch.setattr(esgf, "_index_files", index_files)
+    monkeypatch.setattr(esgf, "_COPIES", {})
+    monkeypatch.setattr(esgf, "_RETRY_AT", {})
+    return [solr, globus, stac], searched
+
+
+_EXPERIMENTS = {"project": "CMIP6", "exp": ["historical", "ssp585"]}
+
+
+def test_datasets(copies: tuple[list[esgf.Index], list[list[str]]]) -> None:
+    _, searched = copies
+    facets = {**_EXPERIMENTS, "timerange": "1990/2050"}
+    # A has data for each year on two indices, B only for the first
+    # experiment, D has no data for 2013 and 2014, and the files of the copy
+    # of E on Globus cannot be found, so it may have data.
+    assert esgf.datasets("CMIP6", facets, ("dataset",)) == [
+        ("A",),
+        ("C",),
+        ("E",),
+    ]
+    assert sorted(map(sorted, searched)) == [
+        ["C.historical", "D.historical", "E.historical"],
+        ["E.ssp585"],
+    ]
+
+
+def test_datasets_without_years(
+    copies: tuple[list[esgf.Index], list[list[str]]],
+) -> None:
+    _, searched = copies
+    assert esgf.datasets("CMIP6", _EXPERIMENTS, ("dataset", "grid")) == [
+        (dataset, grid) for dataset in "ACDE" for grid in ("gn", "gr")
+    ]
+    assert not searched
+
+
+def test_datasets_of_unknown_fields(
+    copies: tuple[list[esgf.Index], list[list[str]]],
+) -> None:
+    assert esgf.datasets("CMIP6", _EXPERIMENTS, ("dataset", "unknown")) == []
+
+
+def test_datasets_with_data_for_years(
+    copies: tuple[list[esgf.Index], list[list[str]]],
+) -> None:
+    # The dates of the datasets cover the years, so no files are needed.
+    _, searched = copies
+    facets = {**_EXPERIMENTS, "timerange": "1990/2012"}
+    assert esgf.datasets("CMIP6", facets, ("dataset",)) == [
+        ("A",),
+        ("C",),
+        ("D",),
+        ("E",),
+    ]
+    assert not searched
+
+
+def test_datasets_of_any_experiment() -> None:
+    index = _index(SolrESGFIndex)
+    found = esgf._join(
+        [
+            _copy(index, "A", "historical"),
+            esgf._Copy(index, "B", {"dataset": ("B",)}, (), from_files=False),
+        ],
+        {"project": "CMIP6"},
+        ("dataset",),
+    )
+    assert list(found) == [("A",), ("B",)]
+
+
+def test_shared_copies(monkeypatch: pytest.MonkeyPatch) -> None:
+    index = _index(SolrESGFIndex, repr="SolrESGFIndex('node')")
+    asked: list[esgf.Query] = []
+    answers: list[list[esgf._Copy] | Exception] = [
+        requests.HTTPError("error"),
+        [_copy(index, "A", "historical")],
+        RuntimeError("unexpected"),
+    ]
+
+    def index_copies(
+        _: esgf.Index,
+        __: esgf._Mapping,
+        query: esgf.Query,
+    ) -> list[esgf._Copy]:
+        asked.append(query)
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(esgf, "_index_copies", index_copies)
+    monkeypatch.setattr(esgf, "_COPIES", {})
+    mapping = esgf._Mapping({}, {})
+    query = {"source_id": ["A"]}
+    # Datasets that could not be found are asked for again.
+    failures = esgf.failures()
+    assert esgf._shared_copies(index, mapping, query) == []
+    assert esgf.failures() == failures + 1
+    [copy] = esgf._shared_copies(index, mapping, query)
+    assert esgf._shared_copies(index, mapping, query) == [copy]
+    assert len(asked) == 2
+    # The datasets are asked for again after a while.
+    monkeypatch.setattr(esgf, "_COPIES_AGE", -1)
+    with pytest.raises(RuntimeError):
+        esgf._shared_copies(index, mapping, query)
+    assert not esgf._COPIES
+
+
+def test_shared_copies_that_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Another search asked for the datasets at the same time, and failed.
+    index = _index(SolrESGFIndex, repr="SolrESGFIndex('node')")
+    query = {"source_id": ["A"]}
+    failed: esgf.Future[list[esgf._Copy] | None] = esgf.Future()
+    failed.set_result(None)
+    key = (index, repr(sorted(query.items())))
+    monkeypatch.setattr(
+        esgf,
+        "_COPIES",
+        {key: (esgf.time.monotonic(), failed)},
+    )
+    failures = esgf.failures()
+    assert esgf._shared_copies(index, esgf._Mapping({}, {}), query) == []
+    assert esgf.failures() == failures + 1
+
+
+@pytest.mark.parametrize(
+    ("record", "dates"),
+    [
+        (
+            {"datetime_start": "1850-01-16T12:00:00Z"},
+            (esgf._ANY_DATES,),
+        ),
+        (
+            {
+                "datetime_start": "1850-01-16T12:00:00Z",
+                "datetime_stop": "2014-12-16T12:00:00Z",
+            },
+            (("1850", "2014"),),
+        ),
+        (
+            {
+                "datetime_start": "1850-01-01T00:00:00Z",
+                "datetime_end": "2015-01-01T00:00:00Z",
+            },
+            (("1850", "2014"),),
+        ),
+    ],
+)
+def test_record_copy(
+    record: dict[str, Any],
+    dates: tuple[tuple[str, str], ...],
+) -> None:
+    mapping = esgf._solr_mapping("CMIP5")
+    assert mapping is not None
+    index = _index(SolrESGFIndex)
+    copy = esgf._record_copy(
+        index,
+        mapping,
+        {
+            **record,
+            "id": "x|node",
+            "model": ["ACCESS1.0"],
+            "version": 20120115,
+        },
+    )
+    assert copy.id == "x|node"
+    assert copy.values["dataset"] == ("ACCESS1-0",)
+    assert copy.values["version"] == ("v20120115",)
+    assert copy.values["exp"] == ()
+    assert copy.dates == dates
+    assert not copy.from_files
+
+
+class _GlobusPages(_GlobusClient):
+    """Send the records from the offset."""
+
+    def __init__(self, records: list[dict[str, Any]]) -> None:
+        super().__init__({})
+        self.records = records
+        self.requests: list[dict[str, Any]] = []
+
+    def post_search(self, _index_id: str, data: dict[str, Any]) -> object:
+        self.requests.append(data)
+        ids = [
+            f["values"]
+            for f in data["filters"]
+            if f["field_name"] == "dataset_id"
+        ]
+        records = [
+            r
+            for r in self.records
+            if not ids or set(esgf._as_list(r["dataset_id"])) & set(ids[0])
+        ]
+        start = data["offset"]
+        page = records[start : start + data["limit"]]
+        return {
+            "gmeta": [{"entries": [{"content": r}]} for r in page],
+            "total": len(records),
+        }
+
+
+@pytest.fixture
+def small_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(esgf, "_PAGE_SIZE", 2)
+
+
+@pytest.mark.usefixtures("small_pages")
+def test_globus_copies() -> None:
+    records = [
+        {
+            "id": f"{i}|node",
+            "dataset_id": "",
+            "source_id": ["A"],
+            "experiment_id": ["x"],
+        }
+        for i in range(3)
+    ]
+    client = _GlobusPages(records)
+    index = _index(GlobusESGFIndex, client=client, index_id="id")
+    mapping = esgf.intake_esgf_mapping("CMIP6")
+    assert mapping is not None
+    copies = esgf._index_copies(index, mapping, {"source_id": ["A"]})
+    assert [c.id for c in copies] == ["0|node", "1|node", "2|node"]
+    assert [r["offset"] for r in client.requests] == [0, 2]
+    assert client.requests[0]["filters"][0] == {
+        "type": "match_any",
+        "field_name": "source_id",
+        "values": ["A"],
+    }
+
+
+@pytest.mark.usefixtures("small_pages")
+def test_too_many_records(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(esgf, "_MAX_RECORDS", 2)
+    client = _GlobusPages([{"id": str(i), "dataset_id": ""} for i in range(5)])
+    index = _index(
+        GlobusESGFIndex,
+        client=client,
+        index_id="id",
+        repr="GlobusESGFIndex('globus')",
+    )
+    failures = esgf.failures()
+    with caplog.at_level(logging.WARNING):
+        assert len(esgf._globus_records(index, [])) == 2
+    assert "Only read the first 2 of 5 records" in caplog.text
+    assert esgf.failures() == failures + 1
+
+
+class _SolrPages:
+    """Send the records from the offset."""
+
+    def __init__(self, records: list[dict[str, Any]]) -> None:
+        self.records = records
+        self.params: list[dict[str, list[str]]] = []
+
+    def get(
+        self, _: str, params: list[tuple[str, str]], **__: object
+    ) -> _Response:
+        found: dict[str, list[str]] = {}
+        for name, value in params:
+            found.setdefault(name, []).append(value)
+        self.params.append(found)
+        start, size = int(found["offset"][0]), int(found["limit"][0])
+        return _Response(
+            {
+                "response": {
+                    "docs": self.records[start : start + size],
+                    "numFound": len(self.records),
+                },
+            },
+        )
+
+
+@pytest.mark.usefixtures("small_pages")
+def test_solr_copies() -> None:
+    records = [{"id": f"{i}|node", "source_id": "A"} for i in range(3)]
+    session = _SolrPages(records)
+    index = _index(
+        SolrESGFIndex,
+        session=session,
+        url="https://node",
+        distrib=False,
+    )
+    mapping = esgf._solr_mapping("CMIP6")
+    assert mapping is not None
+    copies = esgf._index_copies(index, mapping, {"source_id": ["A", "B"]})
+    assert [c.id for c in copies] == ["0|node", "1|node", "2|node"]
+    assert copies[0].values["dataset"] == ("A",)
+    first, second = session.params
+    assert first["source_id"] == ["A", "B"]
+    assert first["type"] == ["Dataset"]
+    assert first["distrib"] == ["false"]
+    assert second["offset"] == ["2"]
+
+
+def _stac_item(name: str, *files: str) -> dict[str, Any]:
+    return {
+        "id": name,
+        "properties": {"cmip6:source_id": name, "latest": True},
+        "assets": {
+            "globus": {"href": "https://globus/"},
+            **{f: {"href": f"https://data/{f}"} for f in files},
+        },
+    }
+
+
+def test_stac_copies(stac_session: _Session) -> None:
+    stac_session.responses.update(
+        {
+            "https://stac/search": _Response(
+                {
+                    "features": [
+                        _stac_item(
+                            "A",
+                            "tas_Amon_A_historical_r1i1p1f1_gn_195001-201412.nc",
+                            "tas_Amon_A_historical_r1i1p1f1_gn_185001-194912.nc",
+                        ),
+                    ],
+                    "numberMatched": 2,
+                    "links": [
+                        {"rel": "next", "href": "https://stac/search?page=2"},
+                    ],
+                },
+            ),
+            "https://stac/search?page=2": _Response(
+                {"features": [_stac_item("B")], "numberMatched": 2},
+            ),
+        },
+    )
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    mapping = esgf.intake_esgf_mapping("CMIP6")
+    assert mapping is not None
+    query = {"project": ["CMIP6"], "source_id": ["A", "B"]}
+    first, second = esgf._index_copies(index, mapping, query)
+    assert first.values["dataset"] == ("A",)
+    assert first.dates == (("185001", "194912"), ("195001", "201412"))
+    assert first.from_files
+    assert second.dates == (esgf._ANY_DATES,)
+    assert stac_session.params[-2]["filter"] == (
+        "\"cmip6:source_id\" IN ('A', 'B') AND latest=true"
+    )
+    # The link to the next page has the parameters.
+    assert stac_session.params[-1] is None
+
+
+def test_stac_copies_without_collection(stac_session: _Session) -> None:
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    mapping = esgf._Mapping({}, {})
+    assert esgf._index_copies(index, mapping, {"project": ["CMIP7"]}) == []
+
+
+def test_too_many_stac_items(
+    monkeypatch: pytest.MonkeyPatch,
+    stac_session: _Session,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(esgf, "_MAX_RECORDS", 1)
+    stac_session.responses["https://stac/search"] = _Response(
+        {
+            "features": [_stac_item("A")],
+            "numberMatched": 2,
+            "links": [{"rel": "next", "href": "https://stac/next"}],
+        },
+    )
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    collection = esgf._stac_collection("stac", "CMIP6")
+    assert collection is not None
+    failures = esgf.failures()
+    with caplog.at_level(logging.WARNING):
+        items = esgf._stac_search(index, collection, "CMIP6", {})
+    assert len(items) == 1
+    assert "Only read the first 1 of 2 datasets" in caplog.text
+    assert esgf.failures() == failures + 1
+
+
+def test_globus_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(esgf, "_GLOBUS_DATASETS_PER_REQUEST", 1)
+    client = _GlobusPages(
+        [
+            {"dataset_id": "a", "title": "tas_A_185001-194912.nc"},
+            {"dataset_id": ["a"], "title": ["tas_A_195001-201412.nc"]},
+            {"dataset_id": "b", "title": "areacella_A.nc"},
+        ],
+    )
+    index = _index(GlobusESGFIndex, client=client, index_id="id")
+    assert esgf._index_files(index, ["a", "b", "c"]) == {
+        "a": [("185001", "194912"), ("195001", "201412")],
+        "b": [esgf._ANY_DATES],
+        # A dataset without files.
+        "c": [],
+    }
+    assert [r["filters"][0]["values"] for r in client.requests] == [
+        ["a"],
+        ["b"],
+        ["c"],
+    ]
+
+
+def test_solr_files() -> None:
+    session = _SolrPages(
+        [{"dataset_id": "a|node", "title": "tas_A_185001-201412.nc"}],
+    )
+    index = _index(
+        SolrESGFIndex,
+        session=session,
+        url="https://node",
+        distrib=False,
+    )
+    assert esgf._index_files(index, ["a|node"]) == {
+        "a|node": [("185001", "201412")],
+    }
+    [params] = session.params
+    assert params["dataset_id"] == ["a|node"]
+    assert params["type"] == ["File"]
+
+
+def test_stac_files() -> None:
+    # The files of the datasets on STAC are known.
+    assert esgf._index_files(_index(STACESGFIndex), ["a"]) == {}

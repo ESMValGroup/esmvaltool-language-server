@@ -9,11 +9,11 @@ import threading
 import time
 import weakref
 from concurrent.futures import Future, ThreadPoolExecutor
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from esmvalcore.config import CFG
 
-from esmvaltool_language_server import esgf, files
+from esmvaltool_language_server import esgf, files, timerange
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Hashable, Mapping
@@ -35,6 +35,13 @@ class _Source(Protocol):
         facets: Mapping[object, object],
         facet: str,
     ) -> list[str]: ...
+
+    def datasets(
+        self,
+        project: str,
+        facets: Mapping[object, object],
+        fields: tuple[str, ...],
+    ) -> list[tuple[str, ...]]: ...
 
 
 # The values on ESGF and in the other data sources of ESMValCore.
@@ -91,7 +98,28 @@ def _search(
         return sorted(set().union(*pool.map(search, sources)))
 
 
-def _set_exception(future: Future[list[str]], run: Future[None]) -> None:
+def _search_datasets(
+    sources: list[_Source],
+    project: str,
+    facets: Mapping[object, object],
+    fields: tuple[str, ...],
+) -> list[tuple[str, ...]]:
+    def search(source: _Source) -> list[tuple[str, ...]]:
+        try:
+            return source.datasets(project, facets, fields)
+        except Exception:
+            logger.exception(
+                "Failed to find the datasets in %s",
+                getattr(source, "__name__", source),
+            )
+            esgf.record_failure(source)
+            return []
+
+    with ThreadPoolExecutor(max_workers=len(sources)) as pool:
+        return sorted(set().union(*pool.map(search, sources)))
+
+
+def _set_exception(future: Future[Any], run: Future[None]) -> None:
     """Fail a search if running it failed."""
     if (exc := run.exception()) is not None:
         future.set_exception(exc)
@@ -99,11 +127,11 @@ def _set_exception(future: Future[list[str]], run: Future[None]) -> None:
 
 @dataclasses.dataclass
 class _Search:
-    """A search for the values of a facet."""
+    """A search for the values of a facet or for datasets."""
 
     start: float
-    future: Future[list[str]]
-    run: Callable[[], list[str]]
+    future: Future[Any]
+    run: Callable[[], Any]
     interactive: bool
     """Whether the search has been submitted to the pool for completion."""
     claimed: bool = False
@@ -136,9 +164,7 @@ class FacetSearch:
         self.max_age = max_age
         self.retry_age = retry_age
         # The searches for which a source could not be searched.
-        self._incomplete: weakref.WeakSet[Future[list[str]]] = (
-            weakref.WeakSet()
-        )
+        self._incomplete: weakref.WeakSet[Future[Any]] = weakref.WeakSet()
         self._executor = ThreadPoolExecutor(
             max_workers=4,
             thread_name_prefix="facet-search",
@@ -200,6 +226,72 @@ class FacetSearch:
         known -= {facet, "project"}
         relevant = {k: v for k, v in facets.items() if k in known}
         key = (project, facet, repr(sorted(relevant.items(), key=str)))
+        run = functools.partial(_search, sources, project, relevant, facet)
+        return self._shared(key, run, background)
+
+    def submit_datasets(
+        self,
+        project: str,
+        facets: Mapping[object, object],
+        fields: tuple[str, ...],
+        *,
+        background: BackgroundSearch | None = None,
+    ) -> Future[list[tuple[str, ...]]] | None:
+        """Start finding datasets, unless it has been started.
+
+        Parameters
+        ----------
+        project:
+            The project of the datasets.
+        facets:
+            The facets of the datasets. For a list of experiments, only the
+            datasets with data for each experiment count. With a
+            ``timerange`` of years, e.g. ``1850/2014``, only the datasets
+            with data for each year count, if the source can find out.
+        fields:
+            The facets to get the values of.
+        background:
+            The background search that starts the search, which may wait for
+            the searches for completion. None for completion.
+
+        Returns
+        -------
+        :
+            The values of the fields of each dataset, sorted. None if they
+            cannot be found.
+        """
+        sources = [
+            s
+            for s in SOURCES
+            if all(s.is_searchable(project, f) for f in fields)
+        ]
+        if not sources:
+            return None
+        known = set().union(
+            {"short_name", "mip"},
+            timerange.FACETS,
+            *(s.known_facets(project) for s in sources),
+        )
+        known -= {*fields, "project"}
+        relevant = {k: v for k, v in facets.items() if k in known}
+        key = (
+            "datasets",
+            project,
+            fields,
+            repr(sorted(relevant.items(), key=str)),
+        )
+        run = functools.partial(
+            _search_datasets, sources, project, relevant, fields
+        )
+        return self._shared(key, run, background)
+
+    def _shared(
+        self,
+        key: Hashable,
+        run: Callable[[], Any],
+        background: BackgroundSearch | None,
+    ) -> Future[Any]:
+        """Start a search, unless it has been started."""
         with self._lock:
             self._remove_expired()
             search = self._searches.get(key)
@@ -207,9 +299,7 @@ class FacetSearch:
                 search = _Search(
                     start=time.monotonic(),
                     future=Future(),
-                    run=functools.partial(
-                        _search, sources, project, relevant, facet
-                    ),
+                    run=run,
                     interactive=background is None,
                 )
                 self._searches[key] = search
@@ -243,7 +333,7 @@ class FacetSearch:
             search.claimed = True
         search.future.set_result(self._find(search))
 
-    def is_complete(self, future: Future[list[str]]) -> bool:
+    def is_complete(self, future: Future[Any]) -> bool:
         """Check that all sources of the values of a facet could be searched.
 
         Parameters
@@ -262,7 +352,7 @@ class FacetSearch:
     def cancel(
         self,
         background: BackgroundSearch,
-        futures: Collection[Future[list[str]]],
+        futures: Collection[Future[Any]],
     ) -> None:
         """Stop waiting for searches, and cancel those that wait for no one.
 
@@ -328,19 +418,24 @@ class BackgroundSearch:
     def __init__(self, search: FacetSearch) -> None:
         self._search = search
 
-    def submit(
+    def submit_datasets(
         self,
         project: str,
         facets: Mapping[object, object],
-        facet: str,
-    ) -> Future[list[str]] | None:
-        """Start finding the values of a facet."""
-        return self._search.submit(project, facets, facet, background=self)
+        fields: tuple[str, ...],
+    ) -> Future[list[tuple[str, ...]]] | None:
+        """Start finding datasets."""
+        return self._search.submit_datasets(
+            project,
+            facets,
+            fields,
+            background=self,
+        )
 
-    def is_complete(self, future: Future[list[str]]) -> bool:
+    def is_complete(self, future: Future[Any]) -> bool:
         """Check that all sources could be searched."""
         return self._search.is_complete(future)
 
-    def cancel(self, futures: Collection[Future[list[str]]]) -> None:
+    def cancel(self, futures: Collection[Future[Any]]) -> None:
         """Cancel the searches that have not started yet."""
         self._search.cancel(self, futures)

@@ -3,8 +3,9 @@
 For example, ``{dataset: '*', project: CMIP6, exp: historical, ensemble:
 r1i1p1f1}`` in a list of datasets is replaced by the datasets of CMIP6 that
 have data for every variable group that uses the list.
-The values of the facets with glob patterns are found with the facet search
-of :mod:`esmvaltool_language_server.search`, and ensemble members and
+The datasets are found with one search for each variable group, by
+:meth:`esmvaltool_language_server.search.FacetSearch.submit_datasets`, and
+ensemble members and
 sub-experiments are written as ranges by
 :func:`esmvalcore.dataset.datasets_to_recipe`.
 The new datasets are written in the style of the dataset that they replace.
@@ -36,24 +37,28 @@ if TYPE_CHECKING:
     from esmvaltool_language_server.context import Path
 
 
+# The values of the facets with glob patterns of each dataset.
+_Rows = list[tuple[str, ...]]
+
+
 class Search(Protocol):
-    """Find the values of facets.
+    """Find datasets.
 
     Refer to :class:`esmvaltool_language_server.search.FacetSearch`.
     """
 
-    def submit(
+    def submit_datasets(
         self,
         project: str,
         facets: Mapping[object, object],
-        facet: str,
-    ) -> Future[list[str]] | None:
-        """Start finding the values of a facet of a project."""
+        fields: tuple[str, ...],
+    ) -> Future[_Rows] | None:
+        """Start finding the values of facets of the datasets of a project."""
 
-    def is_complete(self, future: Future[list[str]]) -> bool:
+    def is_complete(self, future: Future[_Rows]) -> bool:
         """Check that all sources of the values could be searched."""
 
-    def cancel(self, futures: Collection[Future[list[str]]]) -> None:
+    def cancel(self, futures: Collection[Future[_Rows]]) -> None:
         """Cancel the searches that have not started yet."""
 
 
@@ -87,10 +92,6 @@ class Populated:
     missing: list[str] = dataclasses.field(default_factory=list)
     """The datasets that were not replaced because no data was found."""
 
-
-# Facets that :func:`esmvalcore.dataset.datasets_to_recipe` writes as ranges.
-# They have the most values, so they are searched last to search less often.
-_RANGES = ("ensemble", "sub_experiment")
 
 # A glob pattern, as in :mod:`esmvalcore.dataset`.
 _PATTERN = re.compile(r".*[\*\?]+.*|.*\[.*\].*")
@@ -218,17 +219,18 @@ class SearchCancelledError(Exception):
 def _submit(
     search: Search,
     facets: dict[object, object],
-    facet: str,
-) -> Future[list[str]]:
-    """Start finding the values of a facet."""
+    fields: tuple[str, ...],
+) -> Future[_Rows]:
+    """Start finding the values of facets of datasets."""
     project = facets.get("project")
     future = (
         None
         if not isinstance(project, str)
-        else search.submit(project, facets, facet)
+        else search.submit_datasets(project, facets, fields)
     )
     if future is None:
-        msg = f"Cannot search for the values of '{facet}'."
+        names = ", ".join(f"'{f}'" for f in fields)
+        msg = f"Cannot search for the values of {names}."
         raise SearchError(msg)
     return future
 
@@ -263,9 +265,10 @@ def _needs(
 ) -> list[list[list[dict[object, object]]]]:
     """Get the data that a dataset needs for a variable group.
 
-    The data of each ensemble member and sub-experiment of a range and of
-    each experiment of a list is needed, from one of the alternative
-    variables of :func:`_alternatives`.
+    The data of each ensemble member and sub-experiment of a range is needed,
+    from one of the alternative variables of :func:`_alternatives`.
+    The sources of the data check that there is data for each experiment of
+    a list and for each year of the time range.
     """
     facets = {**group, **dataset}
     try:
@@ -274,23 +277,7 @@ def _needs(
         ).from_ranges()
     except RecipeError as exc:
         raise SearchError(str(exc)) from exc
-    return [
-        _alternatives({**facets, **m.facets, **experiment})
-        for m in members
-        for experiment in _experiments(m.facets)
-    ]
-
-
-def _experiments(facets: Mapping[object, object]) -> list[dict[str, object]]:
-    """Get each experiment of a list of experiments.
-
-    ESMValCore concatenates the data of the experiments, so the data of each
-    one is needed. The values of other facets with a list are alternatives.
-    """
-    experiments = facets.get("exp")
-    if not isinstance(experiments, list):
-        return [{}]
-    return [{"exp": experiment} for experiment in experiments]
+    return [_alternatives({**facets, **m.facets}) for m in members]
 
 
 @dataclasses.dataclass
@@ -300,16 +287,12 @@ class _Searcher:
     search: Search
     progress: Progress
     steps: int
-    """The number of facets to search for."""
+    """The number of datasets with glob patterns to search for."""
     step: int = 0
     complete: bool = True
 
-    def wait_for(
-        self,
-        facet: object,
-        futures: Collection[Future[list[str]]],
-    ) -> None:
-        """Wait for the searches for the values of a facet."""
+    def wait_for(self, futures: Collection[Future[_Rows]]) -> None:
+        """Wait for the searches for the datasets of an entry."""
         pending = set(futures)
         total = len(pending)
         while pending:
@@ -317,7 +300,7 @@ class _Searcher:
                 self.search.cancel(pending)
                 raise SearchCancelledError
             self.progress.report(
-                f"Searching for '{facet}': {total - len(pending)} of {total}",
+                f"Searching for datasets: {total - len(pending)} of {total}",
                 int(100 * (self.step + 1 - len(pending) / total) / self.steps),
             )
             _, pending = wait(
@@ -329,11 +312,11 @@ class _Searcher:
 
 # The searches for the data that a dataset needs: all of the outer lists,
 # from any of the alternatives, all searches of an alternative.
-_Futures = list[list[list[Future[list[str]]]]]
+_Futures = list[list[list[Future[_Rows]]]]
 
 
-def _found(futures: _Futures) -> list[str]:
-    """Get the values with all the data that a dataset needs."""
+def _found(futures: _Futures) -> _Rows:
+    """Get the datasets with all the data that they need."""
     found = [
         [[set(f.result()) for f in alt] for alt in need] for need in futures
     ]
@@ -352,34 +335,26 @@ def _expand(
 ) -> list[dict[object, object]]:
     """Replace the glob patterns of a dataset by the values with data.
 
-    The values of one facet are searched at a time, and only the values with
-    all the data that the datasets need for every group are kept.
+    The values of all facets with glob patterns are searched at once, and
+    only the datasets with all the data that they need for every group are
+    kept.
     """
-    datasets = [entry]
-    patterns = sorted(_patterns(entry), key=lambda p: p[0] in _RANGES)
-    for facet, pattern in patterns:
-        futures: list[_Futures] = [
-            [
-                [
-                    [_submit(searcher.search, f, str(facet)) for f in alt]
-                    for alt in need
-                ]
-                for group in groups
-                for need in _needs(group, dataset)
-            ]
-            for dataset in datasets
-        ]
-        searcher.wait_for(
-            facet,
-            [f for fs in futures for n in fs for alt in n for f in alt],
+    patterns = _patterns(entry)
+    fields = tuple(str(facet) for facet, _ in patterns)
+    futures: _Futures = [
+        [[_submit(searcher.search, f, fields) for f in alt] for alt in need]
+        for group in groups
+        for need in _needs(group, entry)
+    ]
+    searcher.wait_for([f for n in futures for alt in n for f in alt])
+    return [
+        {**entry, **dict(zip(fields, row, strict=True))}
+        for row in _found(futures)
+        if all(
+            fnmatchcase(value, str(pattern))
+            for value, (_, pattern) in zip(row, patterns, strict=True)
         )
-        datasets = [
-            {**dataset, facet: value}
-            for dataset, dataset_futures in zip(datasets, futures, strict=True)
-            for value in _found(dataset_futures)
-            if fnmatchcase(value, str(pattern))
-        ]
-    return datasets
+    ]
 
 
 def _with_ranges(
@@ -562,8 +537,7 @@ def populate_edits(
         raise SearchError(msg)
     sequence = nodes[1]
     items = _replaceable(text, entries, sequence)
-    steps = sum(len(_patterns(entry)) for entry, _ in items)
-    searcher = _Searcher(search, progress or Progress(), steps=steps)
+    searcher = _Searcher(search, progress or Progress(), steps=len(items))
     edits, missing = [], []
     for entry, node in items:
         if datasets := _expand(searcher, groups, entry):

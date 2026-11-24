@@ -21,18 +21,22 @@ and some are wrong, so the names of the files are preferred.
 Like ESMValCore, the dates of files are read from their names.
 The time ranges of the experiments of a dataset are joined, but not across
 years without data, because ESMValCore stops if there is no data for a year.
+To replace glob patterns by datasets, :func:`datasets` asks each index for
+all the matching datasets at once, with their dates, refer to
+:func:`_with_data`.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import functools
+import itertools
 import logging
 import re
 import threading
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -252,14 +256,9 @@ def _indices() -> list[Index]:
     return indices
 
 
-def _globus_values(
-    index: GlobusESGFIndex,
-    query: Query,
-    field: str,
-    kind: str = "Dataset",
-    size: int = _MAX_VALUES,
-) -> dict[str, int]:
-    filters = [
+def _globus_filters(query: Query, kind: str) -> list[dict[str, Any]]:
+    """Select the latest datasets or files on Globus that match a query."""
+    return [
         {"type": "match_any", "field_name": name, "values": values}
         for name, values in [
             *query.items(),
@@ -268,6 +267,16 @@ def _globus_values(
             ("retracted", [False]),
         ]
     ]
+
+
+def _globus_values(
+    index: GlobusESGFIndex,
+    query: Query,
+    field: str,
+    kind: str = "Dataset",
+    size: int = _MAX_VALUES,
+) -> dict[str, int]:
+    filters = _globus_filters(query, kind)
     facet = {
         "type": "terms",
         "name": field,
@@ -448,7 +457,9 @@ def _stac_values(
     if collection is None:
         return {}
     name = _stac_name(collection, project, field)
-    aggregation = name.replace(":", "_") + "_frequency"
+    # The names of aggregations have no colons or hyphens, e.g.
+    # cordex_cmip6_source_id_frequency.
+    aggregation = re.sub(r"[:-]", "_", name) + "_frequency"
     if (
         collection.aggregations is not None
         and aggregation not in collection.aggregations
@@ -843,3 +854,532 @@ def _time_values(
     with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
         ranges = [r for found in pool.map(search, jobs) for r in found]
     return timerange.suggestions(facet, ranges)
+
+
+# The maximum number of datasets to get from an index in one search.
+_MAX_RECORDS = 10_000
+
+# The number of datasets or files to get from an index in one request.
+_PAGE_SIZE = 1000
+
+# The number of datasets to get the files of in one request to a Solr index,
+# which takes them in the URL.
+_SOLR_DATASETS_PER_REQUEST = 50
+
+# The number of datasets to get the files of in one request to Globus.
+_GLOBUS_DATASETS_PER_REQUEST = 200
+
+# Stop waiting for an index to send a page of datasets after this many
+# seconds.
+_RECORDS_TIMEOUT = 30
+
+# The dates of files without dates, which ESMValCore uses for any years.
+_ANY_DATES = ("0000", "9999")
+
+# The datasets on an index that searches for different time ranges share, by
+# index and query, with the time they were asked for.
+_COPIES: dict[
+    tuple[object, str],
+    tuple[float, Future[list[_Copy] | None]],
+] = {}
+_COPIES_LOCK = threading.Lock()
+
+# Ask an index for the datasets again after this many seconds.
+_COPIES_AGE = 10 * 60
+
+
+@dataclasses.dataclass(frozen=True)
+class _Copy:
+    """A copy of a dataset on an index."""
+
+    index: Index
+    id: str
+    """The ID of the dataset on the index, to find its files."""
+    values: dict[str, tuple[str, ...]]
+    """The values of the facets in the recipe."""
+    dates: tuple[tuple[str, str], ...]
+    """The first and last date of the files, or of the dataset."""
+    from_files: bool
+    """Whether the dates are those of the files."""
+
+
+def datasets(
+    project: str,
+    facets: Mapping[object, object],
+    fields: tuple[str, ...],
+) -> list[tuple[str, ...]]:
+    """Get the values of facets of the datasets on ESGF that match facets.
+
+    Each index is asked for all the matching datasets at once.
+    A dataset is the same on all indices and for all experiments if it has
+    the same values of the fields.
+    For a list of experiments, a dataset needs data for each experiment.
+    With a ``timerange`` of years, it needs data for each year, refer to
+    :func:`_with_data`.
+    Facets with glob patterns are ignored.
+
+    Parameters
+    ----------
+    project:
+        The project of the datasets.
+    facets:
+        The facets of the datasets.
+    fields:
+        The facets to get the values of.
+
+    Returns
+    -------
+    :
+        The values of the fields of each dataset, sorted. Indices that cannot
+        be reached are skipped.
+    """
+    jobs = [
+        (index, mapping)
+        for index in _indices()
+        if (mapping := _mapping(index, project)) is not None
+        and set(fields) <= set(mapping.facets)
+    ]
+
+    def search(job: tuple[Index, _Mapping]) -> list[_Copy]:
+        index, mapping = job
+        query = mapping.query({**facets, "project": project}, "")
+        return _shared_copies(index, mapping, query)
+
+    with ThreadPoolExecutor(max_workers=max(len(jobs), 1)) as pool:
+        copies = [c for found in pool.map(search, jobs) for c in found]
+    found = _join(copies, facets, fields)
+    years = timerange.selected_years(facets)
+    if years is not None:
+        found = _with_data(found, years)
+    return sorted(found)
+
+
+def _shared_copies(
+    index: Index,
+    mapping: _Mapping,
+    query: Query,
+) -> list[_Copy]:
+    """Get the datasets on an index that match a query.
+
+    Searches for different time ranges ask for the same datasets, so the
+    requests that run at the same time or recently are shared. Datasets that
+    could not be found are asked for again.
+    """
+    key = (index, repr(sorted(query.items())))
+    now = time.monotonic()
+    with _COPIES_LOCK:
+        for old in [k for k, v in _COPIES.items() if v[0] < now - _COPIES_AGE]:
+            del _COPIES[old]
+        owner = key not in _COPIES
+        if owner:
+            _COPIES[key] = (now, Future())
+        future = _COPIES[key][1]
+    if owner:
+        try:
+            copies = _ask(
+                index,
+                "the datasets",
+                lambda: _index_copies(index, mapping, query),
+                None,
+            )
+        except BaseException as exc:
+            with _COPIES_LOCK:
+                del _COPIES[key]
+            future.set_exception(exc)
+            raise
+        if copies is None:
+            with _COPIES_LOCK:
+                del _COPIES[key]
+        future.set_result(copies)
+    copies = future.result()
+    if copies is None:
+        if not owner:
+            record_failure(index)
+        return []
+    return copies
+
+
+def _join(
+    copies: Iterable[_Copy],
+    facets: Mapping[object, object],
+    fields: tuple[str, ...],
+) -> dict[tuple[str, ...], list[_Copy]]:
+    """Join the copies and experiments of the datasets with data.
+
+    Only the datasets with data for each experiment of a list are kept.
+    """
+    experiments = facets.get(_EXPERIMENT)
+    needed = (
+        set(map(str, experiments)) if isinstance(experiments, list) else set()
+    )
+    found: dict[tuple[str, ...], dict[str, list[_Copy]]] = {}
+    for copy in copies:
+        for row in itertools.product(
+            *(copy.values.get(f, ()) for f in fields)
+        ):
+            for experiment in copy.values.get(_EXPERIMENT) or ("",):
+                found.setdefault(row, {}).setdefault(experiment, []).append(
+                    copy,
+                )
+    return {
+        row: [c for copies in by_experiment.values() for c in copies]
+        for row, by_experiment in found.items()
+        if needed <= set(by_experiment)
+    }
+
+
+def _with_data(
+    found: dict[tuple[str, ...], list[_Copy]],
+    years: tuple[int, int],
+) -> dict[tuple[str, ...], list[_Copy]]:
+    """Get the datasets with data for each year.
+
+    The dates of the copies of a dataset, and of its experiments, are joined.
+    A dataset has data if its dates cover the years. The dates of some
+    datasets on Solr and Globus indices are wrong, e.g. of some models with a
+    360-day calendar, and Solr indices may only have some of the files, so
+    the names of the files of the other datasets are asked for. A dataset is
+    left out if these show that it has no data for some of the years.
+    """
+    unsure = {
+        row: copies
+        for row, copies in found.items()
+        if not timerange.covers(years, (d for c in copies for d in c.dates))
+    }
+    files = _files(
+        c for copies in unsure.values() for c in copies if not c.from_files
+    )
+    return {
+        row: copies
+        for row, copies in found.items()
+        if row not in unsure or _files_cover(copies, files, years)
+    }
+
+
+def _files_cover(
+    copies: Iterable[_Copy],
+    files: Mapping[tuple[Index, str], list[tuple[str, str]]],
+    years: tuple[int, int],
+) -> bool:
+    """Check if the files of the copies of a dataset cover years.
+
+    True if the files of a copy are not known.
+    """
+    dates: list[tuple[str, str]] = []
+    for copy in copies:
+        found = (
+            list(copy.dates)
+            if copy.from_files
+            else files.get((copy.index, copy.id))
+        )
+        if found is None:
+            return True
+        dates.extend(found)
+    return timerange.covers(years, dates)
+
+
+def _as_list(value: object) -> list[object]:
+    """Get the values of a field that may have one or more values."""
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def _index_copies(
+    index: Index,
+    mapping: _Mapping,
+    query: Query,
+) -> list[_Copy]:
+    """Get the datasets on an index that match a query."""
+    if isinstance(index, STACESGFIndex):
+        return _stac_copies(index, mapping, query)
+    records = (
+        _globus_records(index, _globus_filters(query, "Dataset"))
+        if isinstance(index, GlobusESGFIndex)
+        else _solr_records(index, [*_solr_params(query), ("type", "Dataset")])
+    )
+    return [_record_copy(index, mapping, record) for record in records]
+
+
+def _record_copy(
+    index: Index,
+    mapping: _Mapping,
+    record: Mapping[str, Any],
+) -> _Copy:
+    """Get a copy of a dataset from its record on Solr or Globus."""
+    start = record.get(_START_DATE)
+    end = next(
+        (record[f] for f in _GLOBUS_END_DATES if record.get(f)),
+        None,
+    )
+    years = start and end and timerange.from_iso(str(start), str(end))
+    return _Copy(
+        index=index,
+        id=str(record.get("id", "")),
+        values=_values(mapping, record.get),
+        # Datasets without dates, e.g. of time-independent variables.
+        dates=(years,) if years else (_ANY_DATES,),
+        from_files=False,
+    )
+
+
+def _values(
+    mapping: _Mapping,
+    get: Callable[[str], object],
+) -> dict[str, tuple[str, ...]]:
+    """Get the values of the facets in a recipe from the fields on ESGF."""
+    return {
+        facet: tuple(
+            mapping.value(facet, str(v)) for v in _as_list(get(field))
+        )
+        for facet, field in mapping.facets.items()
+    }
+
+
+def _pages(
+    index: Index,
+    what: str,
+    fetch: Callable[[int], tuple[list[dict[str, Any]], int]],
+) -> list[dict[str, Any]]:
+    """Get the records that match a search, one page at a time.
+
+    If there are too many, the first ones are returned, which is recorded as
+    a failure.
+    """
+    records: list[dict[str, Any]] = []
+    while True:
+        page, total = fetch(len(records))
+        records.extend(page)
+        if not page or len(records) >= min(total, _MAX_RECORDS):
+            break
+    if total > len(records):
+        logger.warning(
+            "Only read the first %s of %s %s on %s",
+            len(records),
+            total,
+            what,
+            index,
+        )
+        record_failure(index)
+    return records
+
+
+def _globus_records(
+    index: GlobusESGFIndex,
+    filters: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Get the records on Globus that match filters."""
+
+    def fetch(offset: int) -> tuple[list[dict[str, Any]], int]:
+        with _GLOBUS_LOCK:
+            response = index.client.post_search(
+                index.index_id,
+                {
+                    "q": "*",
+                    "filters": filters,
+                    "limit": _PAGE_SIZE,
+                    "offset": offset,
+                },
+            )
+        return [
+            r["entries"][0]["content"] for r in response["gmeta"]
+        ], response["total"]
+
+    return _pages(index, "records", fetch)
+
+
+def _solr_params(query: Query) -> list[tuple[str, str]]:
+    """Get the parameters of a request to Solr for the latest records."""
+    return [
+        *((name, value) for name, values in query.items() for value in values),
+        ("latest", "true"),
+        ("retracted", "false"),
+        ("format", "application/solr+json"),
+    ]
+
+
+def _solr_records(
+    index: SolrESGFIndex,
+    params: list[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    """Get the records on Solr that match the parameters of a request."""
+
+    def fetch(offset: int) -> tuple[list[dict[str, Any]], int]:
+        response = index.session.get(
+            f"{index.url}/esg-search/search",
+            params=[
+                *params,
+                ("distrib", str(index.distrib).lower()),
+                ("limit", str(_PAGE_SIZE)),
+                ("offset", str(offset)),
+            ],
+            timeout=_RECORDS_TIMEOUT,
+        )
+        response.raise_for_status()
+        found = response.json()["response"]
+        return found["docs"], found["numFound"]
+
+    return _pages(index, "records", fetch)
+
+
+def _stac_copies(
+    index: STACESGFIndex,
+    mapping: _Mapping,
+    query: Query,
+) -> list[_Copy]:
+    """Get the datasets on STAC that match a query, with their files."""
+    project = query.get("project", [""])[0]
+    collection = _stac_collection(index.url, project)
+    if collection is None:
+        return []
+    copies = []
+    for item in _stac_search(index, collection, project, query):
+        properties = item.get("properties", {})
+        dates = _file_ranges(item)
+        copies.append(
+            _Copy(
+                index=index,
+                id=str(item.get("id", "")),
+                values=_values(
+                    mapping,
+                    lambda field, p=properties: p.get(
+                        _stac_name(collection, project, field),
+                    ),
+                ),
+                # Datasets without dates, e.g. of time-independent variables.
+                dates=tuple(sorted(dates)) or (_ANY_DATES,),
+                from_files=True,
+            ),
+        )
+    return copies
+
+
+def _stac_search(
+    index: STACESGFIndex,
+    collection: _Collection,
+    project: str,
+    query: Query,
+) -> list[dict[str, Any]]:
+    """Get the datasets on STAC that match a query, one page at a time.
+
+    If there are too many, the first ones are returned, which is recorded as
+    a failure.
+    """
+    url: str | None = f"https://{index.url}/search"
+    params: dict[str, Any] | None = {
+        "collections": collection.url.rsplit("/", 1)[-1],
+        "limit": _PAGE_SIZE,
+        "fields": "id,assets,properties",
+        # Some indices ignore the filter of the items of a collection, but
+        # not that of a search.
+        **_stac_filter(collection, project, query),
+    }
+    items: list[dict[str, Any]] = []
+    total = 0
+    while url is not None and len(items) < _MAX_RECORDS:
+        response = index.session.get(
+            url,
+            params=params,
+            timeout=_RECORDS_TIMEOUT,
+        )
+        response.raise_for_status()
+        page = response.json()
+        items.extend(page["features"])
+        total = page.get("numberMatched", len(items))
+        links = [
+            link for link in page.get("links", []) if link.get("rel") == "next"
+        ]
+        # The link to the next page has the parameters.
+        url = links[0]["href"] if links and page["features"] else None
+        params = None
+        if len(items) >= total:
+            break
+    if url is not None and len(items) < total:
+        logger.warning(
+            "Only read the first %s of %s datasets on %s",
+            len(items),
+            total,
+            index,
+        )
+        record_failure(index)
+    return items
+
+
+def _files(
+    copies: Iterable[_Copy],
+) -> dict[tuple[Index, str], list[tuple[str, str]]]:
+    """Get the first and last date of the files of copies of datasets.
+
+    Copies whose files cannot be found are left out.
+    """
+    ids: dict[Index, set[str]] = {}
+    for copy in copies:
+        ids.setdefault(copy.index, set()).add(copy.id)
+
+    def search(
+        job: tuple[Index, set[str]],
+    ) -> dict[tuple[Index, str], list[tuple[str, str]]]:
+        index, found = job
+        files = _ask(
+            index,
+            "the names of the files",
+            lambda: _index_files(index, sorted(found)),
+            {},
+        )
+        return {(index, i): dates for i, dates in files.items()}
+
+    with ThreadPoolExecutor(max_workers=max(len(ids), 1)) as pool:
+        return {
+            key: dates
+            for found in pool.map(search, ids.items())
+            for key, dates in found.items()
+        }
+
+
+def _index_files(
+    index: Index,
+    ids: list[str],
+) -> dict[str, list[tuple[str, str]]]:
+    """Get the first and last date of the files of datasets on an index.
+
+    Datasets without files have no dates.
+    """
+    files: dict[str, list[tuple[str, str]]] = {i: [] for i in ids}
+    size = (
+        _GLOBUS_DATASETS_PER_REQUEST
+        if isinstance(index, GlobusESGFIndex)
+        else _SOLR_DATASETS_PER_REQUEST
+    )
+    for start in range(0, len(ids), size):
+        batch = ids[start : start + size]
+        if isinstance(index, GlobusESGFIndex):
+            records = _globus_records(
+                index,
+                [
+                    {"type": "match_any", "field_name": name, "values": values}
+                    for name, values in (
+                        ("dataset_id", batch),
+                        ("type", ["File"]),
+                    )
+                ],
+            )
+        elif isinstance(index, SolrESGFIndex):
+            records = _solr_records(
+                index,
+                [
+                    *(("dataset_id", i) for i in batch),
+                    ("type", "File"),
+                    ("fields", "dataset_id,title"),
+                    ("format", "application/solr+json"),
+                ],
+            )
+        else:
+            return {}
+        for record in records:
+            name = str(next(iter(_as_list(record.get("title"))), ""))
+            match = _FILE_DATES.search(name)
+            dataset = str(next(iter(_as_list(record.get("dataset_id"))), ""))
+            files.setdefault(dataset, []).append(
+                (match[1], match[2]) if match else _ANY_DATES,
+            )
+    return files

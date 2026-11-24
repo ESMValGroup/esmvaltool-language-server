@@ -24,7 +24,7 @@ from esmvaltool_language_server import timerange
 from esmvaltool_language_server.cmor import is_name
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator, Mapping
+    from collections.abc import Iterable, Iterator, Mapping
 
     from esmvalcore.config import Session
     from esmvalcore.typing import FacetValue
@@ -121,10 +121,10 @@ def _is_value(value: object) -> bool:
 def _dataset(
     project: str,
     facets: Mapping[object, object],
-    facet: str | None,
+    fields: Iterable[str],
     session: Session,
 ) -> Dataset:
-    """Create a dataset with any value of the facet and of missing facets."""
+    """Create a dataset with any value of the fields and of missing facets."""
     selected: dict[str, FacetValue] = {
         str(key): cast("FacetValue", value)
         for key, value in facets.items()
@@ -138,7 +138,7 @@ def _dataset(
             "mip": "*",
             **selected,
             "project": project,
-            **({} if facet is None else {facet: "*"}),
+            **dict.fromkeys(fields, "*"),
         },
     )
     dataset.session = session
@@ -178,9 +178,9 @@ def facet_values(
     if session is None or not is_searchable(project, facet):
         return []
     if facet in timerange.FACETS:
-        ranges = _time_ranges(_dataset(project, facets, None, session))
+        ranges = _time_ranges(_dataset(project, facets, (), session))
         return timerange.suggestions(facet, ranges)
-    dataset = _dataset(project, facets, facet, session)
+    dataset = _dataset(project, facets, [facet], session)
     values = {
         str(found.facets[facet])
         for found in dataset.from_files()
@@ -189,12 +189,84 @@ def facet_values(
     return sorted(values)
 
 
+def datasets(
+    project: str,
+    facets: Mapping[object, object],
+    fields: tuple[str, ...],
+) -> list[tuple[str, ...]]:
+    """Get the values of facets of the data that matches facets.
+
+    For a list of experiments, a dataset needs data for each experiment.
+    With a ``timerange`` of years, it needs data for each year, like
+    ESMValCore checks. Facets with glob patterns are ignored.
+
+    Parameters
+    ----------
+    project:
+        The project of the datasets.
+    facets:
+        The facets of the datasets.
+    fields:
+        The facets to get the values of.
+
+    Returns
+    -------
+    :
+        The values of the fields of each dataset, sorted.
+    """
+    session = _session(project)
+    if session is None or not all(is_searchable(project, f) for f in fields):
+        return []
+    experiments = facets.get("exp")
+    if not isinstance(experiments, list):
+        experiments = [experiments]
+    found: dict[tuple[str, ...], dict[object, list[Dataset]]] = {}
+    for experiment in experiments:
+        selected = (
+            facets if experiment is None else {**facets, "exp": experiment}
+        )
+        for dataset in _dataset(
+            project, selected, fields, session
+        ).from_files():
+            row = tuple(str(dataset.facets.get(f, "*")) for f in fields)
+            if all(map(is_name, row)):
+                found.setdefault(row, {}).setdefault(experiment, []).append(
+                    dataset,
+                )
+    years = timerange.selected_years(facets)
+    return sorted(
+        row
+        for row, by_experiment in found.items()
+        if len(by_experiment) == len(experiments)
+        and (
+            years is None
+            or _covers([d for ds in by_experiment.values() for d in ds], years)
+        )
+    )
+
+
+def _file_dates(dataset: Dataset) -> list[tuple[str, str]]:
+    """Get the first and last date of the files of a dataset."""
+    dates = [
+        str(file.facets["timerange"]).split("/")
+        for file in dataset.files
+        if "timerange" in file.facets
+    ]
+    return [(d[0], d[-1]) for d in dates]
+
+
+def _covers(datasets: list[Dataset], years: tuple[int, int]) -> bool:
+    """Check if the files of datasets have data for each year.
+
+    The files of the experiments of a dataset are joined. ESMValCore does not
+    check the years of files without dates.
+    """
+    dates = [d for dataset in datasets for d in _file_dates(dataset)]
+    files = sum(len(dataset.files) for dataset in datasets)
+    return len(dates) < files or timerange.covers(years, dates)
+
+
 def _time_ranges(dataset: Dataset) -> Iterator[tuple[str, str]]:
     """Get the time ranges without missing years of each matching dataset."""
     for found in dataset.from_files():
-        dates = [
-            str(file.facets["timerange"]).split("/")
-            for file in found.files
-            if "timerange" in file.facets
-        ]
-        yield from timerange.join((d[0], d[-1]) for d in dates)
+        yield from timerange.join(_file_dates(found))
