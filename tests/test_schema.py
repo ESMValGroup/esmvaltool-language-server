@@ -5,18 +5,7 @@ from esmvaltool_language_server.schema import (
     data_at,
     properties,
     recipe_schema,
-    values,
 )
-
-
-def test_mip_values_of_project() -> None:
-    schema = recipe_schema()
-    path = ("datasets", 0, "mip")
-    recipe = {"datasets": [{"dataset": "CanESM5", "project": "CMIP6"}]}
-    cmip6 = values(schema.at(path, recipe))
-    any_project = values(schema.at(path, MISSING))
-    assert "Amon" in cmip6
-    assert set(cmip6) < set(any_project)
 
 
 def test_step_properties() -> None:

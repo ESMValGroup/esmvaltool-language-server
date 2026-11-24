@@ -28,6 +28,7 @@ dependencies = [
     "esmvalcore>=2.16.0.dev0",
     "globus-sdk",
     "intake-esgf",
+    "pandas",
     "pybtex",
     "pygls>=2.0",
     "pyyaml",

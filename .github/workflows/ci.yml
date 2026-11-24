@@ -31,7 +31,7 @@ jobs:
           # The version is derived from the git history.
           fetch-depth: 0
           persist-credentials: false
-      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e # v0.11.3
         with:
           locked: true
           environments: ${{ matrix.environment }}
@@ -97,7 +97,7 @@ jobs:
           # The version is derived from the git history.
           fetch-depth: 0
           persist-credentials: false
-      - uses: prefix-dev/setup-pixi@ad1da6449d9e506fd127fd67ab2d054a769f6a94 # v0.11.2
+      - uses: prefix-dev/setup-pixi@9936258fee697aff89b3fed6ca1f80a382ef694e # v0.11.3
         with:
           locked: true
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
