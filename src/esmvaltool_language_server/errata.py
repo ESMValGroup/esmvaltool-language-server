@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, cast
 import requests
 import requests_cache
 import yaml
-from esmvalcore.preprocessor._derive import get_required
 from lsprotocol import types
 
 from esmvaltool_language_server import cmor, esgf, yaml_loader
@@ -368,10 +367,7 @@ def _input_facets(
     if not facets.get("derive"):
         return [facets]
     try:
-        required = get_required(
-            str(facets.get("short_name")),
-            str(facets.get("project")),
-        )
+        required = cmor.required_variables(facets)
     except NotImplementedError:
         return [{k: v for k, v in facets.items() if k != "short_name"}]
     return [facets, *({**facets, **facet} for facet in required)]

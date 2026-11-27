@@ -23,10 +23,9 @@ from typing import TYPE_CHECKING, Protocol, cast, override
 import yaml
 from esmvalcore.dataset import Dataset, datasets_to_recipe
 from esmvalcore.exceptions import RecipeError
-from esmvalcore.preprocessor._derive import get_required
 from lsprotocol import types
 
-from esmvaltool_language_server import timerange, yaml_loader
+from esmvaltool_language_server import cmor, timerange, yaml_loader
 from esmvaltool_language_server.schema import data_at
 
 if TYPE_CHECKING:
@@ -248,7 +247,7 @@ def _alternatives(
     if not facets.get("derive") or not isinstance(project, str):
         return [[facets]]
     try:
-        required = get_required(str(facets.get("short_name")), project)
+        required = cmor.required_variables(facets)
     except NotImplementedError:
         return [[facets]]
     inputs = [

@@ -5,16 +5,18 @@ from __future__ import annotations
 import fnmatch
 import functools
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pandas as pd
 from esmvalcore.cmor.table import NoInfo, get_tables
 from esmvalcore.config import CFG
+from esmvalcore.preprocessor._derive import get_required
 
 from esmvaltool_language_server.schema import child, data_at
 
 if TYPE_CHECKING:
     from esmvalcore.cmor.table import InfoBase, TableInfo, VariableInfo
+    from esmvalcore.typing import Facets
 
     from esmvaltool_language_server.context import Path
 
@@ -174,6 +176,37 @@ def dataset_facets(path: Path, recipe: object) -> list[dict[object, object]]:
             item.update(_supplementary(variable, dataset, supplementary))
         facets.append(item)
     return facets
+
+
+def required_variables(
+    facets: dict[object, object],
+) -> list[dict[object, object]]:
+    """Get the variables that a derived variable is computed from.
+
+    Parameters
+    ----------
+    facets:
+        The facets of the derived variable.
+
+    Returns
+    -------
+    :
+        The facets that differ from those of the derived variable, for each
+        variable that it is computed from.
+
+    Raises
+    ------
+    NotImplementedError
+        If the variable cannot be derived, or not for this project.
+    """
+    derived = {str(k): v for k, v in facets.items()}
+    derived["short_name"] = str(facets.get("short_name"))
+    derived["project"] = str(facets.get("project"))
+    try:
+        required = get_required(cast("Facets", derived))
+    except ValueError as exc:
+        raise NotImplementedError(str(exc)) from exc
+    return [dict(item) for item in required]
 
 
 def _info(project: str) -> InfoBase:
