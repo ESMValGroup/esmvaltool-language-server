@@ -144,3 +144,44 @@ def test_join(
     expected: list[tuple[str, str]],
 ) -> None:
     assert timerange.join(ranges) == expected
+
+
+@pytest.mark.parametrize(
+    ("facets", "expected"),
+    [
+        ({"timerange": "1850/2014"}, (1850, 2014)),
+        ({"timerange": "18500101T0000/201412"}, (1850, 2014)),
+        ({"timerange": "850/1849"}, (850, 1849)),
+        ({"start_year": 1850, "end_year": 2014}, (1850, 2014)),
+        ({"start_year": 1850}, (1850, 1850)),
+        ({"end_year": 2014}, (2014, 2014)),
+        ({"timerange": "1850/2014", "start_year": 1900}, (1850, 2014)),
+        ({"timerange": "*"}, None),
+        ({"timerange": "1850/*"}, None),
+        ({"timerange": "P5Y/2014"}, None),
+        ({"timerange": "1850"}, None),
+        ({}, None),
+    ],
+)
+def test_selected_years(
+    facets: dict[object, object],
+    expected: tuple[int, int] | None,
+) -> None:
+    assert timerange.selected_years(facets) == expected
+
+
+@pytest.mark.parametrize(
+    ("ranges", "expected"),
+    [
+        ([("185001", "201412")], True),
+        ([("185001", "194912"), ("195001", "201412")], True),
+        ([("18491201", "20150101")], True),
+        ([("185001", "189912"), ("190101", "201412")], False),
+        ([("185101", "201412")], False),
+        ([("185001", "201312")], False),
+        ([("unknown", "2014")], False),
+        ([], False),
+    ],
+)
+def test_covers(ranges: list[tuple[str, str]], *, expected: bool) -> None:
+    assert timerange.covers((1850, 2014), ranges) is expected

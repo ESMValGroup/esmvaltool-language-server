@@ -25,7 +25,6 @@ from typing import TYPE_CHECKING, Any, cast
 import requests
 import requests_cache
 import yaml
-from esmvalcore.preprocessor._derive import get_required
 from lsprotocol import types
 
 from esmvaltool_language_server import cmor, esgf, yaml_loader
@@ -39,6 +38,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The API of the errata service is not documented. These requests are used:
+# - ``GET /2/search/errata/setup`` gives the projects and their facet names;
+# - ``GET /2/search/errata?project=cmip6&source_id=cesm2`` searches for the
+#   errata of a project and source;
+# - ``GET /2/publication/retrieve?uid=...`` gives the identifiers of the
+#   datasets that an erratum affects, with their versions.
 URL = "https://errata.esgf.io"
 
 SOURCE = "ESGF errata"
@@ -362,10 +367,7 @@ def _input_facets(
     if not facets.get("derive"):
         return [facets]
     try:
-        required = get_required(
-            str(facets.get("short_name")),
-            str(facets.get("project")),
-        )
+        required = cmor.required_variables(facets)
     except NotImplementedError:
         return [{k: v for k, v in facets.items() if k != "short_name"}]
     return [facets, *({**facets, **facet} for facet in required)]

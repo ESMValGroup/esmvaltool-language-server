@@ -9,6 +9,7 @@ from esmvaltool_language_server.cmor import (
     branding_suffixes,
     dataset_facets,
     mips,
+    required_variables,
     table_values,
     variables,
 )
@@ -384,3 +385,34 @@ def test_no_table_values(path: tuple[str | int, ...]) -> None:
     recipe = _recipe(project="CMIP6")
     expected = {"mon": ""} if path[-1] == 0 else {}
     assert table_values(path, recipe) == expected
+
+
+@pytest.mark.parametrize(
+    ("project", "mip"),
+    [("CMIP5", "Lmon"), ("CMIP6", "Emon")],
+)
+def test_required_variables(project: str, mip: str) -> None:
+    facets: dict[object, object] = {
+        "short_name": "ctotal",
+        "project": project,
+        "derive": True,
+    }
+    assert required_variables(facets) == [
+        {"short_name": "cVeg", "mip": "Lmon"},
+        {"short_name": "cSoil", "mip": mip},
+    ]
+
+
+@pytest.mark.parametrize(
+    "facets",
+    [
+        {"short_name": "tas", "project": "CMIP6"},
+        {"short_name": "ctotal", "project": "CMIP7"},
+        {"short_name": "ctotal"},
+    ],
+)
+def test_required_variables_not_available(
+    facets: dict[object, object],
+) -> None:
+    with pytest.raises(NotImplementedError):
+        required_variables(facets)

@@ -45,6 +45,7 @@ authors and references it defines.
   that the recipe schema allows are suggested.
   The values are remembered for 2 hours, or for 10 minutes if an index or
   other data source could not be searched.
+  An index that cannot be reached is not asked again for a minute.
   To get fresh suggestions, for example for local files that you just added
   or after changing the indices in the intake-esgf configuration, restart the
   language server: in Visual Studio Code, press
@@ -94,6 +95,52 @@ authors and references it defines.
   If ESMValTool is installed, go to the definition of an author, project,
   theme, or realm in `config-references.yml`, or open the bibtex file of a
   reference.
+- Replacing datasets with glob patterns, such as
+  `{dataset: '*', project: CMIP6, exp: historical, ensemble: 'r*i1p1f1'}`,
+  by the datasets that have data for every variable group that uses them,
+  with a code lens above `datasets` or `additional_datasets`, or a code
+  action on that line in editors without code lenses.
+  The datasets are found in the local data and on the ESGF indices that are
+  used for completion, with one search for each variable group that asks
+  each index for all the matching datasets at once.
+  Ranges of ensemble members such as `r(1:10)i1p1f1` and lists of
+  experiments such as `[historical, ssp585]`, which ESMValCore
+  concatenates, are kept only for the datasets with data for every member
+  and experiment.
+  Lists of other facets, such as `activity: [CMIP, ScenarioMIP]`, match data
+  for any of their values.
+  If a variable group selects years with `timerange`, `start_year`, or
+  `end_year`, only datasets with data for each year are kept, from any of
+  the experiments of a list.
+  The years are read from the names of the files, as ESMValCore does.
+  On ESGF, the STAC indices list the files of each dataset, and the Solr and
+  Globus indices know the first and last date of each dataset.
+  Because these dates are wrong for some datasets, for example of some
+  models with a 360-day calendar, and the Solr indices may only have some of
+  the files of a dataset, the names of the files of a dataset whose dates do
+  not cover the years are asked for, and the dataset is only left out if
+  these show that it has no data for some of the years.
+  Datasets whose files cannot be found are kept; `esmvaltool run` reports
+  the years without data.
+  Time ranges with `*` or durations, such as `1990/P10Y`, are not checked.
+  As in ESMValCore, a variable with `derive: true` is found if there is data
+  for the variable itself, or else for all the variables that it is derived
+  from; with `force_derivation: true`, only the latter.
+  Datasets with anchors, aliases, or `<<` are not replaced.
+  The new datasets are written in the style of the dataset with glob
+  patterns, `{...}` or one facet per line.
+  This can take a minute if there are many datasets; the progress shows the
+  dataset with glob patterns and the variable groups that are being searched
+  for, and the search can be cancelled.
+  Starting the search again while it runs does nothing, unless the recipe
+  changed: then the running search stops and a new one starts, which uses
+  what the running search has found.
+  Datasets without data are kept, and a warning lists them.
+  A warning is also shown if some sources of data could not be searched, so
+  datasets may be missing, with the reason for each source, e.g. that an
+  index could not be reached or found more datasets than were read.
+  To find out which index is slow, set the log level to `debug`: the log
+  then shows how long each search on an index took.
 
 Other tools also use files named like recipes, for example `recipe.yaml` of
 conda-forge.
@@ -118,6 +165,8 @@ Other editors that support the language server protocol, such as
 [LSP package](https://lsp.sublimetext.io), can start the server with the
 command `esmvaltool-language-server --stdio`, which communicates over stdin
 and stdout.
+The server logs to stderr; add `--log-level debug` to the command to log
+more.
 
 ### Visual Studio Code
 
@@ -129,6 +178,10 @@ In a workspace with multiple folders, put this setting in the workspace
 settings: Visual Studio Code ignores it in the settings of a folder.
 The extension checks files whose name starts with `recipe` and ends with
 `.yml` or `.yaml`.
+The server logs to the ESMValTool output.
+To change the lowest level of the messages that it logs, click the gear
+icon of the ESMValTool output in the Output panel, or run
+**Developer: Set Log Level...**; the server restarts with the new level.
 
 Suggestions are shown while you type.
 To show them at any other point, for example on an empty line or after the
@@ -180,6 +233,9 @@ command, for example `"/path/to/env/bin/esmvaltool-language-server"`.
 Problems are shown with Flymake, completion works with
 `completion-at-point` (`C-M-i`), documentation is shown by ElDoc, and `M-.`
 goes to a definition.
+To replace the datasets with glob patterns in a list, put the cursor on the
+line of `datasets` or `additional_datasets` and run
+`M-x eglot-code-actions`.
 To turn off the errata of datasets, add `:initializationOptions (:errata
 :json-false)` after `"--stdio"` in the command above.
 

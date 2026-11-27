@@ -24,9 +24,20 @@ def main() -> None:
         action="store_true",
         help="Communicate over stdin and stdout (the default).",
     )
-    parser.parse_args()
+    parser.add_argument(
+        "--log-level",
+        type=str.upper,
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default="INFO",
+        help=(
+            "The lowest level of the messages of the server to log, e.g. "
+            "DEBUG to show how long searches on ESGF take (default: INFO)."
+        ),
+    )
+    args = parser.parse_args()
     # stdout is used for the protocol, so log to stderr.
     logging.basicConfig(level=logging.INFO)
+    logging.getLogger(__package__).setLevel(args.log_level)
 
     server.start_io()
 

@@ -1,9 +1,10 @@
-"""Tests for completion, hover, and go to definition."""
+"""Tests for completion, hover, go to definition, and populating datasets."""
 
 from __future__ import annotations
 
+from concurrent.futures import Future
 from textwrap import dedent
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 import pytest
 import yaml
@@ -13,6 +14,7 @@ from esmvaltool_language_server import completion, references
 from esmvaltool_language_server.completion import Options, completions
 from esmvaltool_language_server.definition import definition
 from esmvaltool_language_server.hover import hover
+from esmvaltool_language_server.populate import populate_edits
 from esmvaltool_language_server.schema import MISSING, recipe_schema
 
 if TYPE_CHECKING:
@@ -759,3 +761,64 @@ def test_complete_reference_dataset(split_cursor: SplitCursor) -> None:
         "MSWEP",
         "GPCP-SG",
     ]
+
+
+class _DatasetSearch:
+    """Find the datasets with data for each variable."""
+
+    DATA: ClassVar = {"tas": ["CESM2", "MIROC6"], "pr": ["CESM2"]}
+
+    def submit_datasets(
+        self,
+        _: str,
+        facets: Mapping[object, object],
+        fields: tuple[str, ...],
+    ) -> Future[list[tuple[str, ...]]]:
+        assert fields == ("dataset",)
+        future: Future[list[tuple[str, ...]]] = Future()
+        future.set_result(
+            [(name,) for name in self.DATA[str(facets["short_name"])]],
+        )
+        return future
+
+    def problems(self, _: Future[list[tuple[str, ...]]]) -> list[str]:
+        return []
+
+    def cancel(self, _: object) -> None:
+        pass
+
+
+def test_populate_datasets() -> None:
+    text = dedent("""\
+        datasets:
+          - dataset: '*'
+            project: CMIP6
+            exp: [historical, ssp585]
+          - {dataset: ERA5, project: OBS6}
+        diagnostics:
+          diag:
+            variables:
+              tas: {mip: Amon}
+              pr: {mip: Amon}
+            scripts: null
+        """)
+    [edit] = populate_edits(text, ("datasets",), _DatasetSearch()).edits
+    lines = text.splitlines(keepends=True)
+    start, end = edit.range.start, edit.range.end
+    new = (
+        "".join(lines[: start.line])
+        + lines[start.line][: start.character]
+        + edit.new_text
+        + lines[end.line][end.character :]
+        + "".join(lines[end.line + 1 :])
+    )
+    # Only CESM2 has data for both variables.
+    assert yaml.safe_load(new)["datasets"] == [
+        {
+            "dataset": "CESM2",
+            "project": "CMIP6",
+            "exp": ["historical", "ssp585"],
+        },
+        {"dataset": "ERA5", "project": "OBS6"},
+    ]
+    assert "  - dataset: CESM2\n    project: CMIP6\n" in new
