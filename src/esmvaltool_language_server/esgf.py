@@ -603,6 +603,22 @@ def _ask[T](index: Index, what: str, ask: Callable[[], T], default: T) -> T:
     return default
 
 
+def _timed[T](index: Index, what: str, ask: Callable[[], T]) -> T:
+    """Ask an index and log how long it took.
+
+    The time includes waiting for other requests to Globus indices.
+    """
+    start = time.monotonic()
+    answer = ask()
+    logger.debug(
+        "Got %s from %s in %.1f seconds",
+        what,
+        index,
+        time.monotonic() - start,
+    )
+    return answer
+
+
 def _index_values(
     index: Index,
     query: Query,
@@ -617,7 +633,8 @@ def _index_values(
             return _solr_values(index, query, field)
         return _stac_values(index, query, field)
 
-    return _ask(index, f"the values of {field}", ask, {})
+    what = f"the values of {field}"
+    return _ask(index, what, lambda: _timed(index, what, ask), {})
 
 
 def known_facets(project: str) -> set[str]:
@@ -860,7 +877,8 @@ def _index_ranges(
             return _dataset_ranges(index, query, experiment)
         return _stac_ranges(index, query, experiment)
 
-    return _ask(index, "the dates", ask, [])
+    what = "the dates"
+    return _ask(index, what, lambda: _timed(index, what, ask), [])
 
 
 def _time_values(
@@ -888,8 +906,9 @@ def _time_values(
     return timerange.suggestions(facet, ranges)
 
 
-# The maximum number of datasets to get from an index in one search.
-_MAX_RECORDS = 10_000
+# The maximum number of datasets or files to get from an index in one search.
+# Only the fields that are needed are kept, so they fit in memory.
+_MAX_RECORDS = 200_000
 
 # The number of datasets or files to get from an index in one request.
 _PAGE_SIZE = 1000
@@ -1125,10 +1144,24 @@ def _index_copies(
     """Get the datasets on an index that match a query."""
     if isinstance(index, STACESGFIndex):
         return _stac_copies(index, mapping, query)
+    fields = ["id", _START_DATE, *_GLOBUS_END_DATES, *mapping.facets.values()]
     records = (
-        _globus_records(index, _globus_filters(query, "Dataset"))
+        _globus_records(
+            index,
+            "datasets",
+            _globus_filters(query, "Dataset"),
+            fields,
+        )
         if isinstance(index, GlobusESGFIndex)
-        else _solr_records(index, [*_solr_params(query), ("type", "Dataset")])
+        else _solr_records(
+            index,
+            "datasets",
+            [
+                *_solr_params(query),
+                ("type", "Dataset"),
+                ("fields", ",".join(fields)),
+            ],
+        )
     )
     return [_record_copy(index, mapping, record) for record in records]
 
@@ -1168,22 +1201,37 @@ def _values(
     }
 
 
-def _pages(
+def _pages[C](
     index: Index,
     what: str,
-    fetch: Callable[[int], tuple[list[dict[str, Any]], int]],
+    first: C,
+    fetch: Callable[[C], tuple[list[dict[str, Any]], int, C | None]],
 ) -> list[dict[str, Any]]:
     """Get the records that match a search, one page at a time.
 
-    If there are too many, the first ones are returned, which is recorded as
-    a failure.
+    A page is fetched from a cursor, which gives the page, the total number
+    of records, and the cursor of the next page, if there is one.
+    If there are more records than can be read, the first ones are returned,
+    which is recorded as a failure.
+    The number of records and how long it took to read them is logged, which
+    includes waiting for other requests to Globus indices.
     """
+    start = time.monotonic()
     records: list[dict[str, Any]] = []
-    while True:
-        page, total = fetch(len(records))
+    cursor: C | None = first
+    total = 0
+    while cursor is not None and len(records) < _MAX_RECORDS:
+        page, total, cursor = fetch(cursor)
         records.extend(page)
-        if not page or len(records) >= min(total, _MAX_RECORDS):
+        if not page or len(records) >= total:
             break
+    logger.debug(
+        "Found %s %s on %s in %.1f seconds",
+        len(records),
+        what,
+        index,
+        time.monotonic() - start,
+    )
     if total > len(records):
         logger.warning(
             "Only read the first %s of %s %s on %s",
@@ -1201,26 +1249,34 @@ def _pages(
 
 def _globus_records(
     index: GlobusESGFIndex,
+    what: str,
     filters: list[dict[str, Any]],
+    fields: Iterable[str],
 ) -> list[dict[str, Any]]:
-    """Get the records on Globus that match filters."""
+    """Get the fields of the records of datasets or files on Globus.
 
-    def fetch(offset: int) -> tuple[list[dict[str, Any]], int]:
+    The records are scrolled through, because a search only gives the first
+    10000 records. Only the fields are kept, because there can be many.
+    """
+    keep = frozenset(fields)
+
+    def fetch(
+        marker: str,
+    ) -> tuple[list[dict[str, Any]], int, str | None]:
         with _GLOBUS_LOCK:
-            response = index.client.post_search(
+            response = index.client.scroll(
                 index.index_id,
-                {
-                    "q": "*",
-                    "filters": filters,
-                    "limit": _PAGE_SIZE,
-                    "offset": offset,
-                },
+                {"q": "*", "filters": filters, "limit": _PAGE_SIZE},
+                marker=marker or None,
             )
-        return [
-            r["entries"][0]["content"] for r in response["gmeta"]
-        ], response["total"]
+        page = [
+            {k: v for k, v in r["entries"][0]["content"].items() if k in keep}
+            for r in response["gmeta"]
+        ]
+        more = response.get("has_next_page") and response.get("marker")
+        return page, response["total"], more or None
 
-    return _pages(index, "records", fetch)
+    return _pages(index, what, "", fetch)
 
 
 def _solr_params(query: Query) -> list[tuple[str, str]]:
@@ -1235,11 +1291,12 @@ def _solr_params(query: Query) -> list[tuple[str, str]]:
 
 def _solr_records(
     index: SolrESGFIndex,
+    what: str,
     params: list[tuple[str, str]],
 ) -> list[dict[str, Any]]:
-    """Get the records on Solr that match the parameters of a request."""
+    """Get the records of datasets or files on Solr that match parameters."""
 
-    def fetch(offset: int) -> tuple[list[dict[str, Any]], int]:
+    def fetch(offset: int) -> tuple[list[dict[str, Any]], int, int]:
         response = index.session.get(
             f"{index.url}/esg-search/search",
             params=[
@@ -1252,9 +1309,9 @@ def _solr_records(
         )
         response.raise_for_status()
         found = response.json()["response"]
-        return found["docs"], found["numFound"]
+        return found["docs"], found["numFound"], offset + len(found["docs"])
 
-    return _pages(index, "records", fetch)
+    return _pages(index, what, 0, fetch)
 
 
 def _stac_copies(
@@ -1267,9 +1324,19 @@ def _stac_copies(
     collection = _stac_collection(index.url, project)
     if collection is None:
         return []
+    names = {
+        field: _stac_name(collection, project, field)
+        for field in mapping.facets.values()
+    }
     copies = []
-    for item in _stac_search(index, collection, project, query):
-        properties = item.get("properties", {})
+    for item in _stac_search(
+        index,
+        collection,
+        project,
+        query,
+        names.values(),
+    ):
+        properties = item["properties"]
         dates = _file_ranges(item)
         copies.append(
             _Copy(
@@ -1277,9 +1344,7 @@ def _stac_copies(
                 id=str(item.get("id", "")),
                 values=_values(
                     mapping,
-                    lambda field, p=properties: p.get(
-                        _stac_name(collection, project, field),
-                    ),
+                    lambda field, p=properties: p.get(names[field]),
                 ),
                 # Datasets without dates, e.g. of time-independent variables.
                 dates=tuple(sorted(dates)) or (_ANY_DATES,),
@@ -1289,29 +1354,55 @@ def _stac_copies(
     return copies
 
 
+def _stac_item(item: dict[str, Any], names: frozenset[str]) -> dict[str, Any]:
+    """Keep the ID, the links to the files, and some properties of an item."""
+    return {
+        "id": item.get("id"),
+        "assets": {
+            key: {"href": asset.get("href")}
+            for key, asset in item.get("assets", {}).items()
+        },
+        "properties": {
+            name: value
+            for name, value in item.get("properties", {}).items()
+            if name in names
+        },
+    }
+
+
 def _stac_search(
     index: STACESGFIndex,
     collection: _Collection,
     project: str,
     query: Query,
+    names: Iterable[str],
 ) -> list[dict[str, Any]]:
     """Get the datasets on STAC that match a query, one page at a time.
 
-    If there are too many, the first ones are returned, which is recorded as
-    a failure.
+    Only the ID, the links to the files, and the properties with the names
+    are kept.
     """
-    url: str | None = f"https://{index.url}/search"
-    params: dict[str, Any] | None = {
+    keep = frozenset(names)
+    params = {
         "collections": collection.url.rsplit("/", 1)[-1],
         "limit": _PAGE_SIZE,
-        "fields": "id,assets,properties",
+        # Some indices send all the properties anyway.
+        "fields": ",".join(
+            ["id", "assets", *(f"properties.{n}" for n in keep)]
+        ),
         # Some indices ignore the filter of the items of a collection, but
         # not that of a search.
         **_stac_filter(collection, project, query),
     }
-    items: list[dict[str, Any]] = []
-    total = 0
-    while url is not None and len(items) < _MAX_RECORDS:
+
+    def fetch(
+        cursor: tuple[str, dict[str, Any] | None],
+    ) -> tuple[
+        list[dict[str, Any]],
+        int,
+        tuple[str, dict[str, Any] | None] | None,
+    ]:
+        url, params = cursor
         response = index.session.get(
             url,
             params=params,
@@ -1319,28 +1410,17 @@ def _stac_search(
         )
         response.raise_for_status()
         page = response.json()
-        items.extend(page["features"])
-        total = page.get("numberMatched", len(items))
+        items = [_stac_item(item, keep) for item in page["features"]]
         links = [
             link for link in page.get("links", []) if link.get("rel") == "next"
         ]
         # The link to the next page has the parameters.
-        url = links[0]["href"] if links and page["features"] else None
-        params = None
-        if len(items) >= total:
-            break
-    if url is not None and len(items) < total:
-        logger.warning(
-            "Only read the first %s of %s datasets on %s",
-            len(items),
-            total,
-            index,
-        )
-        record_failure(
-            index,
-            f"found more datasets than the {len(items)} that were read",
-        )
-    return items
+        more = (links[0]["href"], None) if links and items else None
+        return items, page.get("numberMatched", len(items)), more
+
+    return _pages(
+        index, "datasets", (f"https://{index.url}/search", params), fetch
+    )
 
 
 def _files(
@@ -1393,6 +1473,7 @@ def _index_files(
         if isinstance(index, GlobusESGFIndex):
             records = _globus_records(
                 index,
+                "files",
                 [
                     {"type": "match_any", "field_name": name, "values": values}
                     for name, values in (
@@ -1400,10 +1481,12 @@ def _index_files(
                         ("type", ["File"]),
                     )
                 ],
+                ["dataset_id", "title"],
             )
         elif isinstance(index, SolrESGFIndex):
             records = _solr_records(
                 index,
+                "files",
                 [
                     *(("dataset_id", i) for i in batch),
                     ("type", "File"),

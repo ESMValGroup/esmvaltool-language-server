@@ -298,6 +298,36 @@ describe("ESMValTool extension", () => {
     });
   });
 
+  it("logs the messages of the language server at their level", () => {
+    const extension = vscode.extensions.getExtension<{
+      parseLogLine: (line: string, fallback?: string) => [string, string];
+    }>("ESMValGroup.esmvaltool");
+    assert.ok(extension);
+    const { parseLogLine } = extension.exports;
+    assert.deepEqual(parseLogLine("DEBUG:esgf:Read 1 of 1 records"), [
+      "debug",
+      "esgf:Read 1 of 1 records",
+    ]);
+    assert.deepEqual(parseLogLine("INFO:server:Started"), [
+      "info",
+      "server:Started",
+    ]);
+    assert.deepEqual(parseLogLine("WARNING:esgf:Not asking"), [
+      "warn",
+      "esgf:Not asking",
+    ]);
+    assert.deepEqual(parseLogLine("CRITICAL:server:Failed"), [
+      "error",
+      "server:Failed",
+    ]);
+    // Lines that were not logged by Python.
+    assert.deepEqual(parseLogLine("ERROR 1: PROJ: failed"), [
+      "error",
+      "ERROR 1: PROJ: failed",
+    ]);
+    assert.deepEqual(parseLogLine("output", "info"), ["info", "output"]);
+  });
+
   it("does not use the schema for other files named like recipes", async () => {
     const extension = vscode.extensions.getExtension<{
       isRecipe(resource: string): boolean;
@@ -339,6 +369,35 @@ describe("ESMValTool extension", () => {
     await waitFor(
       () => (api.errataOption === true ? true : undefined),
       "the default errata setting",
+    );
+  });
+
+  it("sends the log level of the output to the language server", async () => {
+    const extension = vscode.extensions.getExtension<{
+      logLevel: string | undefined;
+    }>("ESMValGroup.esmvaltool");
+    assert.ok(extension);
+    const api = extension.exports;
+    assert.equal(api.logLevel, "info");
+    // Only extension tests can set the log level, of all output channels.
+    await vscode.commands.executeCommand(
+      "_extensionTests.setLogLevel",
+      "debug",
+    );
+    try {
+      await waitFor(
+        () => (api.logLevel === "debug" ? true : undefined),
+        "the debug log level",
+      );
+    } finally {
+      await vscode.commands.executeCommand(
+        "_extensionTests.setLogLevel",
+        "info",
+      );
+    }
+    await waitFor(
+      () => (api.logLevel === "info" ? true : undefined),
+      "the info log level",
     );
   });
 

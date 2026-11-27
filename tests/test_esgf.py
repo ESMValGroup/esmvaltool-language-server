@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -1251,15 +1252,20 @@ def test_record_copy(
 
 
 class _GlobusPages(_GlobusClient):
-    """Send the records from the offset."""
+    """Send the records from the marker, which is the offset."""
 
     def __init__(self, records: list[dict[str, Any]]) -> None:
         super().__init__({})
         self.records = records
         self.requests: list[dict[str, Any]] = []
 
-    def post_search(self, _index_id: str, data: dict[str, Any]) -> object:
-        self.requests.append(data)
+    def scroll(
+        self,
+        _index_id: str,
+        data: dict[str, Any],
+        marker: str | None = None,
+    ) -> object:
+        self.requests.append({**data, "marker": marker})
         ids = [
             f["values"]
             for f in data["filters"]
@@ -1270,11 +1276,15 @@ class _GlobusPages(_GlobusClient):
             for r in self.records
             if not ids or set(esgf._as_list(r["dataset_id"])) & set(ids[0])
         ]
-        start = data["offset"]
-        page = records[start : start + data["limit"]]
+        start = int(marker or 0)
+        end = start + data["limit"]
         return {
-            "gmeta": [{"entries": [{"content": r}]} for r in page],
+            "gmeta": [
+                {"entries": [{"content": r}]} for r in records[start:end]
+            ],
             "total": len(records),
+            "marker": str(end),
+            "has_next_page": end < len(records),
         }
 
 
@@ -1300,12 +1310,38 @@ def test_globus_copies() -> None:
     assert mapping is not None
     copies = esgf._index_copies(index, mapping, {"source_id": ["A"]})
     assert [c.id for c in copies] == ["0|node", "1|node", "2|node"]
-    assert [r["offset"] for r in client.requests] == [0, 2]
+    assert [r["marker"] for r in client.requests] == [None, "2"]
     assert client.requests[0]["filters"][0] == {
         "type": "match_any",
         "field_name": "source_id",
         "values": ["A"],
     }
+
+
+@pytest.mark.usefixtures("small_pages")
+def test_globus_records(caplog: pytest.LogCaptureFixture) -> None:
+    records = [{"id": str(i), "dataset_id": "", "url": "x"} for i in range(5)]
+    client = _GlobusPages(records)
+    index = _index(GlobusESGFIndex, client=client, index_id="id", repr="g")
+    with caplog.at_level(logging.DEBUG, logger=esgf.__name__):
+        found = esgf._globus_records(index, "files", [], ["id"])
+    assert found == [{"id": str(i)} for i in range(5)]
+    assert re.search(r"Found 5 files on g in \d+\.\d seconds", caplog.text)
+
+
+def test_index_values_logs_time(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(esgf, "_globus_values", lambda *_: {"A": 1})
+    index = _index(GlobusESGFIndex, repr="GlobusESGFIndex('globus')")
+    with caplog.at_level(logging.DEBUG, logger=esgf.__name__):
+        assert esgf._index_values(index, {}, "source_id") == {"A": 1}
+    assert re.search(
+        r"Got the values of source_id from GlobusESGFIndex\('globus'\) in "
+        r"\d+\.\d seconds",
+        caplog.text,
+    )
 
 
 @pytest.mark.usefixtures("small_pages")
@@ -1323,12 +1359,12 @@ def test_too_many_records(
     )
     failures = esgf.failures()
     with caplog.at_level(logging.WARNING):
-        assert len(esgf._globus_records(index, [])) == 2
-    assert "Only read the first 2 of 5 records" in caplog.text
+        assert len(esgf._globus_records(index, "datasets", [], ["id"])) == 2
+    assert "Only read the first 2 of 5 datasets" in caplog.text
     assert esgf.failures() == failures + 1
     [problem] = esgf.failures_since(failures)
     assert problem == (
-        "GlobusESGFIndex('globus') found more records than the 2 that were "
+        "GlobusESGFIndex('globus') found more datasets than the 2 that were "
         "read"
     )
 
@@ -1377,6 +1413,8 @@ def test_solr_copies() -> None:
     assert first["source_id"] == ["A", "B"]
     assert first["type"] == ["Dataset"]
     assert first["distrib"] == ["false"]
+    [fields] = first["fields"]
+    assert {"id", "datetime_start", "source_id"} <= set(fields.split(","))
     assert second["offset"] == ["2"]
 
 
@@ -1391,7 +1429,10 @@ def _stac_item(name: str, *files: str) -> dict[str, Any]:
     }
 
 
-def test_stac_copies(stac_session: _Session) -> None:
+def test_stac_copies(
+    stac_session: _Session,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     stac_session.responses.update(
         {
             "https://stac/search": _Response(
@@ -1418,7 +1459,9 @@ def test_stac_copies(stac_session: _Session) -> None:
     mapping = esgf.intake_esgf_mapping("CMIP6")
     assert mapping is not None
     query = {"project": ["CMIP6"], "source_id": ["A", "B"]}
-    first, second = esgf._index_copies(index, mapping, query)
+    with caplog.at_level(logging.DEBUG, logger=esgf.__name__):
+        first, second = esgf._index_copies(index, mapping, query)
+    assert re.search(r"Found 2 datasets on .* in \d+\.\d seconds", caplog.text)
     assert first.values["dataset"] == ("A",)
     assert first.dates == (("185001", "194912"), ("195001", "201412"))
     assert first.from_files
@@ -1426,8 +1469,29 @@ def test_stac_copies(stac_session: _Session) -> None:
     assert stac_session.params[-2]["filter"] == (
         "\"cmip6:source_id\" IN ('A', 'B') AND latest=true"
     )
+    fields = stac_session.params[-2]["fields"].split(",")
+    assert {"id", "assets", "properties.cmip6:source_id"} <= set(fields)
     # The link to the next page has the parameters.
     assert stac_session.params[-1] is None
+
+
+def test_stac_search_keeps_properties(stac_session: _Session) -> None:
+    stac_session.responses["https://stac/search"] = _Response(
+        {"features": [_stac_item("A", "a.nc")], "numberMatched": 1},
+    )
+    index = _index(STACESGFIndex, url="stac", session=stac_session)
+    collection = esgf._stac_collection("stac", "CMIP6")
+    assert collection is not None
+    names = ["cmip6:source_id"]
+    [item] = esgf._stac_search(index, collection, "CMIP6", {}, names)
+    assert item == {
+        "id": "A",
+        "assets": {
+            "globus": {"href": "https://globus/"},
+            "a.nc": {"href": "https://data/a.nc"},
+        },
+        "properties": {"cmip6:source_id": "A"},
+    }
 
 
 def test_stac_copies_without_collection(stac_session: _Session) -> None:
@@ -1454,7 +1518,7 @@ def test_too_many_stac_items(
     assert collection is not None
     failures = esgf.failures()
     with caplog.at_level(logging.WARNING):
-        items = esgf._stac_search(index, collection, "CMIP6", {})
+        items = esgf._stac_search(index, collection, "CMIP6", {}, [])
     assert len(items) == 1
     assert "Only read the first 1 of 2 datasets" in caplog.text
     assert esgf.failures() == failures + 1

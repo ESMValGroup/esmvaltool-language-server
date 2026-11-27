@@ -139,6 +139,8 @@ authors and references it defines.
   A warning is also shown if some sources of data could not be searched, so
   datasets may be missing, with the reason for each source, e.g. that an
   index could not be reached or found more datasets than were read.
+  To find out which index is slow, set the log level to `debug`: the log
+  then shows how long each search on an index took.
 
 Other tools also use files named like recipes, for example `recipe.yaml` of
 conda-forge.
@@ -163,6 +165,8 @@ Other editors that support the language server protocol, such as
 [LSP package](https://lsp.sublimetext.io), can start the server with the
 command `esmvaltool-language-server --stdio`, which communicates over stdin
 and stdout.
+The server logs to stderr; add `--log-level debug` to the command to log
+more.
 
 ### Visual Studio Code
 
@@ -174,6 +178,10 @@ In a workspace with multiple folders, put this setting in the workspace
 settings: Visual Studio Code ignores it in the settings of a folder.
 The extension checks files whose name starts with `recipe` and ends with
 `.yml` or `.yaml`.
+The server logs to the ESMValTool output.
+To change the lowest level of the messages that it logs, click the gear
+icon of the ESMValTool output in the Output panel, or run
+**Developer: Set Log Level...**; the server restarts with the new level.
 
 Suggestions are shown while you type.
 To show them at any other point, for example on an empty line or after the

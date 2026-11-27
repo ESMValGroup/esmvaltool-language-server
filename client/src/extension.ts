@@ -9,6 +9,7 @@ import {
   ServerOptions,
 } from "vscode-languageclient/node";
 
+import { Level, logLines, parseLogLine } from "./log";
 import { isRecipe, Mode, RECIPE_SELECTOR, SchemaFallback } from "./schema";
 
 const SERVER_MODULE = "esmvaltool_language_server";
@@ -19,6 +20,8 @@ let fallback: SchemaFallback | undefined;
 // channel outlives the client: the client closes a channel that it created
 // itself when it stops and writing to a closed channel throws an error.
 let outputChannel: vscode.LogOutputChannel | undefined;
+// The log level that was sent to the running language server.
+let logLevel: string | undefined;
 
 // Starting the server takes a few seconds, so restarts can be requested
 // while one is still in progress. Starts and stops run one at a time, so
@@ -35,10 +38,14 @@ export interface Api {
   readonly mode: Mode;
   /** The errata option that was sent to the running language server. */
   readonly errataOption: boolean | undefined;
+  /** The log level that was sent to the running language server. */
+  readonly logLevel: string | undefined;
   /** The channel that the running language server logs to. */
   readonly outputChannel: vscode.LogOutputChannel | undefined;
   /** Check if a file is a recipe, for the schema. */
   isRecipe(resource: string): boolean;
+  /** Get the level and message of a line logged by the language server. */
+  parseLogLine(line: string, fallback?: Level): [Level, string];
 }
 
 export async function activate(context: vscode.ExtensionContext): Promise<Api> {
@@ -54,6 +61,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
       "esmvaltool.restartLanguageServer",
       restart,
     ),
+    outputChannel.onDidChangeLogLevel(() => {
+      if (client && serverLogLevel() !== logLevel) {
+        void restart();
+      }
+    }),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("esmvaltool.languageServer")) {
         void restart();
@@ -73,6 +85,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
         { errata?: boolean } | undefined;
       return options?.errata;
     },
+    get logLevel() {
+      return client ? logLevel : undefined;
+    },
     get outputChannel() {
       return client?.outputChannel;
     },
@@ -80,6 +95,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
       return schemaFallback.mode;
     },
     isRecipe,
+    parseLogLine,
   };
 }
 
@@ -111,17 +127,26 @@ async function start(): Promise<void> {
     );
     return;
   }
+  const settings = vscode.workspace.getConfiguration(
+    "esmvaltool.languageServer",
+  );
+  const level = serverLogLevel();
   const serverOptions: ServerOptions = {
     command: python,
-    args: ["-m", SERVER_MODULE],
+    // Servers older than the option only accept the default.
+    args: [
+      "-m",
+      SERVER_MODULE,
+      ...(level === "info" ? [] : ["--log-level", level]),
+    ],
   };
   const clientOptions: LanguageClientOptions = {
     documentSelector: [RECIPE_SELECTOR],
     outputChannel,
+    // Log the messages of the server at their level, instead of as errors.
+    stdioOptions: { stdout: logLines("info"), stderr: logLines("error") },
     initializationOptions: {
-      errata: vscode.workspace
-        .getConfiguration("esmvaltool.languageServer")
-        .get<boolean>("errata", true),
+      errata: settings.get<boolean>("errata", true),
     },
   };
   const starting = new LanguageClient(
@@ -141,6 +166,7 @@ async function start(): Promise<void> {
     return;
   }
   client = starting;
+  logLevel = level;
   fallback?.useServer(python);
 }
 
@@ -155,6 +181,22 @@ function restart(): Promise<void> {
     await stop();
     await start();
   });
+}
+
+/** Get the log level of the server from that of its output channel. */
+function serverLogLevel(): string {
+  switch (outputChannel?.logLevel) {
+    case vscode.LogLevel.Trace:
+    case vscode.LogLevel.Debug:
+      return "debug";
+    case vscode.LogLevel.Warning:
+      return "warning";
+    case vscode.LogLevel.Error:
+    case vscode.LogLevel.Off:
+      return "error";
+    default:
+      return "info";
+  }
 }
 
 /** Find the Python interpreter of the environment with ESMValTool. */
