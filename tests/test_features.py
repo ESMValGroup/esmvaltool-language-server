@@ -1,4 +1,4 @@
-"""Tests for completion, hover, and go to definition."""
+"""Tests for completion, hover, go to definition, and formatting."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from lsprotocol import types
 from esmvaltool_language_server import completion, references
 from esmvaltool_language_server.completion import Options, completions
 from esmvaltool_language_server.definition import definition
+from esmvaltool_language_server.formatting import formatting_edits
 from esmvaltool_language_server.hover import hover
 from esmvaltool_language_server.schema import MISSING, recipe_schema
 
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     SplitCursor = Callable[[str], tuple[str, types.Position]]
+    ApplyEdits = Callable[[str, list[types.TextEdit]], str]
 
 URI = "file:///recipe_test.yml"
 
@@ -759,3 +761,22 @@ def test_complete_reference_dataset(split_cursor: SplitCursor) -> None:
         "MSWEP",
         "GPCP-SG",
     ]
+
+
+def test_format_recipe(apply_edits: ApplyEdits) -> None:
+    # Put the project after the MIP, which the formatter swaps back.
+    text = RECIPE.replace(
+        "project: CMIP6\n        mip: Amon\n",
+        "mip: Amon\n        project: CMIP6  # Comment\n",
+    )
+    assert text != RECIPE
+    formatted = apply_edits(text, formatting_edits(text))
+    assert formatted != text
+    assert "project: CMIP6  # Comment\n" in formatted
+    assert yaml.safe_load(formatted) == yaml.safe_load(text)
+    # Formatting a formatted recipe changes nothing.
+    assert formatting_edits(formatted) == []
+
+
+def test_format_new_recipe() -> None:
+    assert formatting_edits("") == []

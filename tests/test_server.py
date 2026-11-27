@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import itertools
 import sys
 import threading
 from concurrent.futures import Future
@@ -9,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 import yaml
+from esmvalcore.recipe import format_recipe
 from lsprotocol import types
 from pygls.lsp.client import LanguageClient
 from pygls.workspace import Workspace
@@ -578,3 +580,42 @@ async def test_other_files_have_no_features() -> None:
         types.DefinitionParams(text_document=document, position=position),
     )
     assert location is None
+
+
+@pytest.mark.asyncio
+async def test_formatting(tmp_path: Path) -> None:
+    published: asyncio.Queue[types.PublishDiagnosticsParams] = asyncio.Queue()
+    async with _client(published) as client:
+        count = itertools.count()
+
+        async def format_(text: str) -> list[types.TextEdit] | None:
+            uri = (tmp_path / f"recipe_{next(count)}.yml").as_uri()
+            _open(client, uri, text)
+            return await client.text_document_formatting_async(
+                types.DocumentFormattingParams(
+                    text_document=types.TextDocumentIdentifier(uri=uri),
+                    options=types.FormattingOptions(
+                        tab_size=2,
+                        insert_spaces=True,
+                    ),
+                ),
+            )
+
+        # The emoji is one character, but two UTF-16 code units, which the
+        # client counts.
+        text = 'documentation: {title: "🌍", description: x}'
+        edits = await format_(text)
+        assert list(edits or []) == [
+            types.TextEdit(
+                range=types.Range(
+                    start=types.Position(line=0, character=0),
+                    end=types.Position(line=0, character=44),
+                ),
+                new_text=format_recipe(text),
+            ),
+        ]
+        assert await format_("documentation: [\n") is None
+        edits = await format_(format_recipe(text))
+        assert edits is not None
+        assert not edits
+        assert await format_("package: {name: example}\n") is None

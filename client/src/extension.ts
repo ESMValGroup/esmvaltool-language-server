@@ -4,6 +4,7 @@ import { promisify } from "node:util";
 import { PythonExtension } from "@vscode/python-extension";
 import * as vscode from "vscode";
 import {
+  DocumentFormattingRequest,
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
@@ -54,6 +55,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<Api> {
       "esmvaltool.restartLanguageServer",
       restart,
     ),
+    vscode.commands.registerCommand("esmvaltool.formatRecipe", formatRecipe),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("esmvaltool.languageServer")) {
         void restart();
@@ -155,6 +157,65 @@ function restart(): Promise<void> {
     await stop();
     await start();
   });
+}
+
+/**
+ * Format a recipe with the language server.
+ *
+ * This asks the language server directly, because the Format Document command
+ * can use another extension that formats YAML files.
+ *
+ * @param uri - The recipe, which the button at the top of the editor passes,
+ *   or the recipe in the active editor if not given.
+ */
+async function formatRecipe(uri?: vscode.Uri): Promise<void> {
+  const document = uri
+    ? await vscode.workspace.openTextDocument(uri)
+    : vscode.window.activeTextEditor?.document;
+  if (!document) {
+    return;
+  }
+  if (!client) {
+    void vscode.window.showErrorMessage(
+      "The recipe was not formatted, because the ESMValTool language server " +
+        "is not running.",
+    );
+    return;
+  }
+  const version = document.version;
+  let edits: vscode.TextEdit[] | undefined;
+  try {
+    const result = await client.sendRequest(DocumentFormattingRequest.type, {
+      textDocument: { uri: document.uri.toString() },
+      options: { tabSize: 2, insertSpaces: true },
+    });
+    edits = result
+      ? await client.protocol2CodeConverter.asTextEdits(result)
+      : undefined;
+  } catch (error) {
+    void vscode.window.showErrorMessage(
+      `The recipe was not formatted: ${String(error)}`,
+    );
+    return;
+  }
+  if (!edits) {
+    void vscode.window.showInformationMessage(
+      "The recipe was not formatted, because it is not valid YAML or not an " +
+        "ESMValTool recipe.",
+    );
+    return;
+  }
+  if (document.version !== version) {
+    // The edits are for the old text, so they would end up in the wrong place.
+    void vscode.window.showInformationMessage(
+      "The recipe was not formatted, because it changed while it was being " +
+        "formatted. Try again.",
+    );
+    return;
+  }
+  const edit = new vscode.WorkspaceEdit();
+  edit.set(document.uri, edits);
+  await vscode.workspace.applyEdit(edit);
 }
 
 /** Find the Python interpreter of the environment with ESMValTool. */
