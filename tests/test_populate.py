@@ -480,7 +480,6 @@ def test_populate_incomplete() -> None:
         _Search(complete=False),
     )
     assert populated.edits
-    assert not populated.complete
     assert populated.problems == ["index could not be reached"]
 
 
@@ -492,7 +491,7 @@ def test_populate_reports_progress() -> None:
         _Search(),
         Progress(report=lambda message, p: reported.append((message, p))),
     )
-    assert populated.complete
+    assert not populated.problems
     # Two entries with patterns, searched for two variable groups.
     assert reported == [
         (

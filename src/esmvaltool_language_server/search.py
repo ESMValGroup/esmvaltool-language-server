@@ -129,12 +129,9 @@ class _Search:
     start: float
     future: Future[Any]
     run: Callable[[], Any]
-    interactive: bool
-    """Whether the search has been submitted to the pool for completion."""
-    claimed: bool = False
-    """Whether a worker has started the search."""
     owners: set[BackgroundSearch] = dataclasses.field(default_factory=set)
-    """The background searches that wait for the search."""
+    """The background searches that wait for the search, which can cancel
+    it. Empty for the searches for completion, which are never cancelled."""
 
 
 class FacetSearch:
@@ -142,7 +139,7 @@ class FacetSearch:
 
     The searches can be started from several threads. Searches for
     completion have their own workers, so they do not wait for the many
-    searches of :attr:`background`.
+    searches for datasets of :meth:`background`.
 
     Parameters
     ----------
@@ -177,7 +174,7 @@ class FacetSearch:
         self._lock = threading.Lock()
 
     def background(self) -> BackgroundSearch:
-        """Start searches that may wait for the searches for completion.
+        """Start searches for datasets that can be cancelled.
 
         Returns
         -------
@@ -193,8 +190,6 @@ class FacetSearch:
         project: str,
         facets: Mapping[object, object],
         facet: str,
-        *,
-        background: BackgroundSearch | None = None,
     ) -> Future[list[str]] | None:
         """Start finding the values of a facet, unless it has been started.
 
@@ -206,9 +201,6 @@ class FacetSearch:
             The facets of the datasets.
         facet:
             The facet to get the values of.
-        background:
-            The background search that starts the search, which may wait for
-            the searches for completion. None for completion.
 
         Returns
         -------
@@ -227,7 +219,7 @@ class FacetSearch:
         relevant = {k: v for k, v in facets.items() if k in known}
         key = (project, facet, repr(sorted(relevant.items(), key=str)))
         run = functools.partial(_search, sources, project, relevant, facet)
-        return self._shared(key, run, background)
+        return self._shared(key, run, self._executor, None)
 
     def submit_datasets(
         self,
@@ -235,7 +227,7 @@ class FacetSearch:
         facets: Mapping[object, object],
         fields: tuple[str, ...],
         *,
-        background: BackgroundSearch | None = None,
+        background: BackgroundSearch,
     ) -> Future[list[tuple[str, ...]]] | None:
         """Start finding datasets, unless it has been started.
 
@@ -251,8 +243,7 @@ class FacetSearch:
         fields:
             The facets to get the values of.
         background:
-            The background search that starts the search, which may wait for
-            the searches for completion. None for completion.
+            The background search that starts the search and can cancel it.
 
         Returns
         -------
@@ -283,12 +274,13 @@ class FacetSearch:
         run = functools.partial(
             _search_datasets, sources, project, relevant, fields
         )
-        return self._shared(key, run, background)
+        return self._shared(key, run, self._background_executor, background)
 
     def _shared(
         self,
         key: Hashable,
         run: Callable[[], Any],
+        executor: ThreadPoolExecutor,
         background: BackgroundSearch | None,
     ) -> Future[Any]:
         """Start a search, unless it has been started."""
@@ -300,54 +292,18 @@ class FacetSearch:
                     start=time.monotonic(),
                     future=Future(),
                     run=run,
-                    interactive=background is None,
                 )
                 self._searches[key] = search
-                executor = (
-                    self._executor
-                    if background is None
-                    else self._background_executor
+                executor.submit(self._run, search).add_done_callback(
+                    functools.partial(_set_exception, search.future),
                 )
-                self._start(executor, search)
-            elif background is None and not search.interactive:
-                # Do not wait for the background searches that are before it.
-                search.interactive = True
-                self._start(self._executor, search)
             if background is not None:
                 search.owners.add(background)
             return search.future
 
-    def _start(self, executor: ThreadPoolExecutor, search: _Search) -> None:
-        """Run a search with an executor, unless another one runs it first."""
-        executor.submit(self._run, search).add_done_callback(
-            functools.partial(_set_exception, search.future),
-        )
-
     def _run(self, search: _Search) -> None:
-        with self._lock:
-            if (
-                search.claimed
-                or not search.future.set_running_or_notify_cancel()
-            ):
-                return
-            search.claimed = True
-        search.future.set_result(self._find(search))
-
-    def is_complete(self, future: Future[Any]) -> bool:
-        """Check that all sources of the values of a facet could be searched.
-
-        Parameters
-        ----------
-        future:
-            The values, from :meth:`submit`.
-
-        Returns
-        -------
-        :
-            False if a source could not be searched, so values may be missing.
-        """
-        with self._lock:
-            return future not in self._problems
+        if search.future.set_running_or_notify_cancel():
+            search.future.set_result(self._find(search))
 
     def problems(self, future: Future[Any]) -> list[str]:
         """Describe why sources of the values could not be searched.
@@ -373,26 +329,25 @@ class FacetSearch:
     ) -> None:
         """Stop waiting for searches, and cancel those that wait for no one.
 
-        Only the searches that have not started yet and that no search for
-        completion or other background search waits for are cancelled.
+        Only the searches that have not started yet and that no other
+        background search waits for are cancelled.
 
         Parameters
         ----------
         background:
             The background search that stops waiting.
         futures:
-            The values, from :meth:`submit`.
+            The datasets, from :meth:`submit_datasets`.
         """
         with self._lock:
             for key, search in list(self._searches.items()):
-                if search.future not in futures:
+                if (
+                    search.future not in futures
+                    or background not in search.owners
+                ):
                     continue
                 search.owners.discard(background)
-                if (
-                    not search.owners
-                    and not search.interactive
-                    and search.future.cancel()
-                ):
+                if not search.owners and search.future.cancel():
                     del self._searches[key]
 
     def _remove_expired(self) -> None:
@@ -421,7 +376,7 @@ class FacetSearch:
 
 
 class BackgroundSearch:
-    """Start searches that may wait for the searches for completion.
+    """Start searches for datasets that can be cancelled.
 
     Searches that are shared with other background searches are only
     cancelled when none of them waits for them anymore.
@@ -448,10 +403,6 @@ class BackgroundSearch:
             fields,
             background=self,
         )
-
-    def is_complete(self, future: Future[Any]) -> bool:
-        """Check that all sources could be searched."""
-        return self._search.is_complete(future)
 
     def problems(self, future: Future[Any]) -> list[str]:
         """Describe why sources could not be searched."""

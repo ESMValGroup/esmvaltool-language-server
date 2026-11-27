@@ -92,11 +92,6 @@ class Populated:
     missing: list[str] = dataclasses.field(default_factory=list)
     """The datasets that were not replaced because no data was found."""
 
-    @property
-    def complete(self) -> bool:
-        """Whether all sources of data could be searched."""
-        return not self.problems
-
 
 # A glob pattern, as in :mod:`esmvalcore.dataset`.
 _PATTERN = re.compile(r".*[\*\?]+.*|.*\[.*\].*")
@@ -534,7 +529,7 @@ def populate_edits(
     path:
         The path of the list of datasets.
     search:
-        Finds the values of facets.
+        Finds the datasets.
     progress:
         Reports the progress of the search, if given.
 

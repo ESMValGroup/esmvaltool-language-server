@@ -345,9 +345,7 @@ async def completion(
         future = ls.facet_search.submit(project, facets, facet)
         if future is None:
             return []
-        # The search may have been cancelled before it started, by a search
-        # for datasets.
-        if future.done() and not future.cancelled():
+        if future.done():
             return future.result()
         pending.append(future)
         return None

@@ -216,20 +216,6 @@ async def test_completion_without_facet_search() -> None:
     assert not result.is_incomplete
 
 
-@pytest.mark.asyncio
-async def test_completion_with_cancelled_facet_search(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # A search for datasets cancelled the search before it started.
-    monkeypatch.setattr(server, "FACET_SEARCH_SECONDS", 0.1)
-    search = _FacetSearch()
-    search.future.cancel()
-    ls = _exp_completion_server(search)
-    result = await server.completion(ls, _exp_completion_params())
-    assert result.is_incomplete
-    assert not result.items
-
-
 POPULATE_RECIPE = (
     "datasets:\n"
     "  - {dataset: '*', project: CMIP6}\n"
